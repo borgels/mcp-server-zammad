@@ -33,7 +33,7 @@ function makeClient(record: Recorded[], onBehalfOf?: string): ZammadClient {
   }) as unknown as typeof fetch;
   return new ZammadClient({
     apiToken: 'tok',
-    baseUrl: 'https://borgels.zammad.com',
+    baseUrl: 'https://helpdesk.example.com',
     onBehalfOf,
     fetchImpl,
   });
@@ -118,8 +118,8 @@ describe('guardrails', () => {
   it('technician create-for-customer uses the guess: auto-create syntax', async () => {
     process.env.ZAMMAD_PROFILE = 'technician';
     const record: Recorded[] = [];
-    await createTicket(makeClient(record), { title: 'Ny sag', body: 'x', customer: 'manager@example.com' });
-    expect(record[0]?.body).toMatchObject({ customer_id: 'guess:manager@example.com' });
+    await createTicket(makeClient(record), { title: 'Ny sag', body: 'x', customer: 'new.customer@example.com' });
+    expect(record[0]?.body).toMatchObject({ customer_id: 'guess:new.customer@example.com' });
   });
 
   it('manage_user refuses role/password/group changes', async () => {
