@@ -33,7 +33,7 @@ function makeClient(record: Recorded[], onBehalfOf?: string): ZammadClient {
   }) as unknown as typeof fetch;
   return new ZammadClient({
     apiToken: 'tok',
-    baseUrl: 'https://borgels.zammad.com',
+    baseUrl: 'https://helpdesk.example.com',
     onBehalfOf,
     fetchImpl,
   });
@@ -42,11 +42,11 @@ function makeClient(record: Recorded[], onBehalfOf?: string): ZammadClient {
 describe('identity plumbing', () => {
   it('sends Bearer auth and the From header when acting on behalf of a user', async () => {
     const record: Recorded[] = [];
-    const client = makeClient(record, 'sbo@spitze.net');
+    const client = makeClient(record, 'customer@example.com');
     await client.get('/tickets');
 
     expect(record[0]?.headers.Authorization).toBe('Bearer tok');
-    expect(record[0]?.headers.From).toBe('sbo@spitze.net');
+    expect(record[0]?.headers.From).toBe('customer@example.com');
   });
 
   it('omits the From header when acting as the token user', async () => {
@@ -97,7 +97,7 @@ describe('guardrails', () => {
     const client = makeClient([]);
 
     await expect(
-      createTicket(client, { title: 'Test sag', body: 'x', customer: 'other@borgels.com' }),
+      createTicket(client, { title: 'Test sag', body: 'x', customer: 'other@example.com' }),
     ).rejects.toThrow('technician');
     await expect(replyTicket(client, { ticketId: 1, body: 'x', internal: true })).rejects.toThrow('technician');
     await expect(updateTicket(client, { ticketId: 1, ownerId: 4 })).rejects.toThrow('technician');
@@ -118,8 +118,8 @@ describe('guardrails', () => {
   it('technician create-for-customer uses the guess: auto-create syntax', async () => {
     process.env.ZAMMAD_PROFILE = 'technician';
     const record: Recorded[] = [];
-    await createTicket(makeClient(record), { title: 'Ny sag', body: 'x', customer: 'jeo@onedanmark.dk' });
-    expect(record[0]?.body).toMatchObject({ customer_id: 'guess:jeo@onedanmark.dk' });
+    await createTicket(makeClient(record), { title: 'Ny sag', body: 'x', customer: 'new.customer@example.com' });
+    expect(record[0]?.body).toMatchObject({ customer_id: 'guess:new.customer@example.com' });
   });
 
   it('manage_user refuses role/password/group changes', async () => {

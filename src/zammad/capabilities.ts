@@ -143,7 +143,7 @@ export const ZAMMAD_CAPABILITIES: ZammadCapability[] = [
     title: 'List/Search Users (Zammad, technician)',
     description: 'List or search Zammad users (customers and agents), or fetch one by userId.',
     risk: 'read',
-    examples: [{ query: 'spitze' }, { userId: 5 }],
+    examples: [{ query: 'smith' }, { userId: 5 }],
     identifierFormats: [],
     safetyNotes: [],
     keywords: ['users', 'brugere', 'kunder', 'customer', 'search'],
@@ -154,7 +154,7 @@ export const ZAMMAD_CAPABILITIES: ZammadCapability[] = [
     description:
       'Create or update a customer (e.g. register a new employee before opening tickets for them). Roles, passwords, and groups are refused — those belong in the Zammad admin UI.',
     risk: 'write',
-    examples: [{ action: 'create', payload: { email: 'ny@borgels.com', firstname: 'Ny', lastname: 'Medarbejder', organization: 'Borgels Services ApS' } }],
+    examples: [{ action: 'create', payload: { email: 'new.employee@example.com', firstname: 'Ny', lastname: 'Medarbejder', organization: 'Example Corp' } }],
     identifierFormats: [],
     safetyNotes: ['Cannot set role_ids/password/group_ids by design.'],
     keywords: ['user', 'opret bruger', 'kunde', 'medarbejder', 'update'],
