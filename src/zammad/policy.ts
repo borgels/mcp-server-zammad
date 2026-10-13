@@ -14,6 +14,11 @@
  * Identity comes from the gateway as X-MCP-User and is only honored when
  * ZAMMAD_TRUST_FORWARDED_USER=true (the header is stripped from public
  * traffic by the gateway; only the internal network can set it).
+ *
+ * Over HTTP the server fails closed: a request without a trusted identity
+ * is rejected instead of silently running as the (admin) token user. The
+ * token-user fallback is kept for stdio and for HTTP deployments that set
+ * ZAMMAD_ALLOW_TOKEN_USER=true explicitly (with the trust flag off).
  */
 export type ZammadProfile = 'user' | 'technician';
 
@@ -23,6 +28,15 @@ export function profile(): ZammadProfile {
 
 export function trustForwardedUser(): boolean {
   return process.env.ZAMMAD_TRUST_FORWARDED_USER === 'true';
+}
+
+export function allowTokenUser(): boolean {
+  return process.env.ZAMMAD_ALLOW_TOKEN_USER === 'true';
+}
+
+/** A Zammad login/email: no whitespace/control characters, bounded length. */
+export function isValidForwardedUser(value: string): boolean {
+  return value.length > 0 && value.length <= 254 && /^[^\s\x00-\x1f\x7f]+$/.test(value);
 }
 
 export interface ZammadPolicyDecision {

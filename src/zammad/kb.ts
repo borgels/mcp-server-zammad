@@ -1,4 +1,5 @@
 import type { ZammadClient } from './client.js';
+import { pathSegment } from './path.js';
 
 /**
  * Knowledge-base access. The practical search route is Zammad's global
@@ -30,7 +31,7 @@ export async function searchKnowledgeBase(client: ZammadClient, input: SearchKno
     if (!input.knowledgeBaseId) {
       throw new Error('knowledgeBaseId is required when fetching an answer.');
     }
-    const path = `/knowledge_bases/${input.knowledgeBaseId}/answers/${input.answerId}`;
+    const path = `/knowledge_bases/${pathSegment(input.knowledgeBaseId)}/answers/${pathSegment(input.answerId)}`;
 
     let translationId = input.translationId;
     if (!translationId) {

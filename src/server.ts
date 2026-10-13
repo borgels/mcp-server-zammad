@@ -7,6 +7,11 @@ export interface CreateServerOptions {
   clientOptions?: ZammadClientOptions;
   /** Gateway-verified end-user identity; every Zammad call runs as this user. */
   onBehalfOf?: string;
+  /**
+   * Fail closed when no onBehalfOf identity is supplied instead of falling
+   * back to the API token user. The HTTP transport sets this.
+   */
+  requireOnBehalfOf?: boolean;
 }
 
 export function createServer(options: CreateServerOptions = {}): McpServer {
@@ -15,8 +20,13 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     version: '0.1.0',
   });
 
+  const onBehalfOf = options.onBehalfOf?.trim() || undefined;
+  if (options.requireOnBehalfOf && !onBehalfOf) {
+    throw new Error('A verified user identity is required; refusing to fall back to the API token user.');
+  }
+
   const base = options.client ?? new ZammadClient(options.clientOptions);
-  const client = options.onBehalfOf ? base.actingAs(options.onBehalfOf) : base;
+  const client = onBehalfOf ? base.actingAs(onBehalfOf) : base;
   registerZammadTools(server, client);
 
   return server;

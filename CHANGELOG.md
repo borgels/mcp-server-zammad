@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Security: the HTTP transport now fails closed when no trusted user
+  identity is available instead of falling back to the API token user.
+  Token-user mode over HTTP requires the new `ZAMMAD_ALLOW_TOKEN_USER=true`.
+- Security: `ZAMMAD_TRUST_FORWARDED_USER=true` now requires `MCP_HTTP_TOKEN`
+  (refuses to start otherwise); the token is compared in constant time.
+- Security: `zammad_manage_user` accepts an explicit allowlist of
+  profile/contact fields instead of refusing a fixed denylist.
+- Hardening: caller-supplied URL path parameters are validated before use.
+
 ## 0.1.0
 
 Initial release.
