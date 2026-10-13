@@ -262,7 +262,7 @@ export function registerZammadTools(server: McpServer, client: ZammadClient): vo
     {
       title: 'Create/Update User (Zammad)',
       description:
-        'Create or update a customer user (e.g. register a new employee). Roles, passwords, and group assignments are refused by design.',
+        'Create or update a customer user (e.g. register a new employee). payload accepts only profile/contact fields: firstname, lastname, email (create only), phone, mobile, fax, web, department, address, street, zip, city, country, note, vip, organization, organization_id. Roles, groups, organization memberships, and passwords are refused by design.',
       inputSchema: {
         action: z.enum(['create', 'update']),
         userId: z.number().int().positive().optional(),

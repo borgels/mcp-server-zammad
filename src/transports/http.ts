@@ -1,18 +1,29 @@
 import { createServer as createNodeServer } from 'node:http';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createServer as createMcpServer } from '../server.js';
-import { trustForwardedUser } from '../zammad/policy.js';
+import { allowTokenUser, profile, trustForwardedUser } from '../zammad/policy.js';
 import {
   assertAllowedOrigin,
   assertAuthorized,
+  assertSafeHttpStartup,
   corsHeaders,
   getHttpConfig,
   HttpRequestError,
   readJsonBody,
+  resolveHttpIdentity,
   sendJson,
 } from './http-helpers.js';
 
 const config = getHttpConfig();
+assertSafeHttpStartup(config);
+if (!trustForwardedUser()) {
+  console.error(
+    allowTokenUser()
+      ? `WARNING: ZAMMAD_ALLOW_TOKEN_USER=true — every HTTP request runs as the API token user (profile: ${profile()}).`
+      : 'WARNING: ZAMMAD_TRUST_FORWARDED_USER is not "true" and ZAMMAD_ALLOW_TOKEN_USER is not set; ' +
+          'all MCP requests will be rejected with 401.',
+  );
+}
 
 const httpServer = createNodeServer(async (req, res) => {
   try {
@@ -35,17 +46,20 @@ const httpServer = createNodeServer(async (req, res) => {
     }
 
     assertAuthorized(req, config);
-    const body = await readJsonBody(req, config.maxBodyBytes);
 
     // The gateway forwards the Entra-verified user as X-MCP-User; the
     // stateless per-request server binds it as the Zammad on-behalf-of
     // identity. Only honored when the deployment says the header can be
     // trusted (it never arrives from public traffic — the gateway sets it).
-    const forwardedUser = trustForwardedUser()
-      ? (firstHeaderValue(req.headers['x-mcp-user']) ?? undefined)
-      : undefined;
+    // Fails closed: no trusted identity → 401, never the admin token user
+    // (unless ZAMMAD_ALLOW_TOKEN_USER=true was set explicitly).
+    const identity = resolveHttpIdentity(req);
+    const body = await readJsonBody(req, config.maxBodyBytes);
 
-    const mcpServer = createMcpServer({ onBehalfOf: forwardedUser });
+    const mcpServer = createMcpServer({
+      onBehalfOf: identity.onBehalfOf,
+      requireOnBehalfOf: trustForwardedUser() || !allowTokenUser(),
+    });
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });
@@ -76,12 +90,6 @@ const httpServer = createNodeServer(async (req, res) => {
     }
   }
 });
-
-function firstHeaderValue(value: string | string[] | undefined): string | undefined {
-  const raw = Array.isArray(value) ? value[0] : value;
-  const trimmed = raw?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 httpServer.listen(config.port, config.host, () => {
   console.error(`Zammad MCP HTTP server listening on http://${config.host}:${config.port}/mcp`);

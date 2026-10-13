@@ -5,7 +5,16 @@ import { ZammadClient } from '../src/zammad/client.js';
 import { createServer } from '../src/server.js';
 import { checkToolPolicy } from '../src/zammad/policy.js';
 import { createTicket, replyTicket, updateTicket } from '../src/zammad/tickets.js';
-import { manageUser } from '../src/zammad/users.js';
+import { listUsers, manageUser } from '../src/zammad/users.js';
+import { pathSegment } from '../src/zammad/path.js';
+import type { IncomingMessage } from 'node:http';
+import {
+  assertAuthorized,
+  assertSafeHttpStartup,
+  HttpRequestError,
+  resolveHttpIdentity,
+  tokensMatch,
+} from '../src/transports/http-helpers.js';
 
 const originalEnv = { ...process.env };
 
@@ -128,5 +137,135 @@ describe('guardrails', () => {
     await expect(
       manageUser(client, { action: 'create', payload: { email: 'x@y.dk', role_ids: [1] } }),
     ).rejects.toThrow('admin UI');
+  });
+
+  it('manage_user refuses unknown fields (allowlist, not denylist)', async () => {
+    await expect(
+      manageUser(makeClient([]), { action: 'create', payload: { email: 'x@y.dk', somethingNew: true } }),
+    ).rejects.toThrow(/Refusing to set somethingNew/);
+  });
+});
+
+describe('manage_user allowlist', () => {
+  it.each([
+    'role_ids',
+    'roles',
+    'group_ids',
+    'groups',
+    'group_names_access_map',
+    'organization_ids',
+    'organizations',
+    'password',
+    'permissions',
+    'login',
+    'active',
+  ])('refuses %s', async key => {
+    const record: Recorded[] = [];
+    await expect(
+      manageUser(makeClient(record), { action: 'create', payload: { email: 'x@example.com', [key]: 1 } }),
+    ).rejects.toThrow(/Refusing to set/);
+    expect(record).toHaveLength(0);
+  });
+
+  it('refuses changing email on update but allows safe profile fields', async () => {
+    const record: Recorded[] = [];
+    const client = makeClient(record);
+    await expect(
+      manageUser(client, { action: 'update', userId: 5, payload: { email: 'other@example.com' } }),
+    ).rejects.toThrow(/Refusing to set email/);
+    await manageUser(client, {
+      action: 'update',
+      userId: 5,
+      payload: { firstname: 'A', phone: '123', organization: 'Example' },
+    });
+    expect(record).toHaveLength(1);
+    expect(record[0]?.url).toBe('https://helpdesk.example.com/api/v1/users/5');
+    expect(record[0]?.body).toEqual({ firstname: 'A', phone: '123', organization: 'Example' });
+  });
+});
+
+describe('fail-closed identity', () => {
+  function req(headers: Record<string, string>): IncomingMessage {
+    return { headers } as unknown as IncomingMessage;
+  }
+
+  it('rejects HTTP requests without X-MCP-User when the trust flag is on', () => {
+    process.env.ZAMMAD_TRUST_FORWARDED_USER = 'true';
+    expect(() => resolveHttpIdentity(req({}))).toThrow(HttpRequestError);
+    expect(() => resolveHttpIdentity(req({ 'x-mcp-user': '   ' }))).toThrow(/X-MCP-User/);
+    expect(() => resolveHttpIdentity(req({ 'x-mcp-user': 'a b@example.com' }))).toThrow(/Invalid/);
+    expect(resolveHttpIdentity(req({ 'x-mcp-user': 'u@example.com' }))).toEqual({ onBehalfOf: 'u@example.com' });
+  });
+
+  it('still requires the header when the trust flag is on even if token-user mode is allowed', () => {
+    process.env.ZAMMAD_TRUST_FORWARDED_USER = 'true';
+    process.env.ZAMMAD_ALLOW_TOKEN_USER = 'true';
+    expect(() => resolveHttpIdentity(req({}))).toThrow(/X-MCP-User/);
+  });
+
+  it.each(['user', 'technician'])('rejects untrusted HTTP requests in the %s profile by default', p => {
+    process.env.ZAMMAD_PROFILE = p;
+    delete process.env.ZAMMAD_TRUST_FORWARDED_USER;
+    delete process.env.ZAMMAD_ALLOW_TOKEN_USER;
+    // A header without the trust flag must not be honored, nor fall back to the token user.
+    expect(() => resolveHttpIdentity(req({ 'x-mcp-user': 'u@example.com' }))).toThrow(HttpRequestError);
+    expect(() => resolveHttpIdentity(req({}))).toThrow(/ZAMMAD_ALLOW_TOKEN_USER/);
+  });
+
+  it('falls back to the token user only with explicit ZAMMAD_ALLOW_TOKEN_USER=true', () => {
+    delete process.env.ZAMMAD_TRUST_FORWARDED_USER;
+    process.env.ZAMMAD_ALLOW_TOKEN_USER = 'true';
+    expect(resolveHttpIdentity(req({ 'x-mcp-user': 'u@example.com' }))).toEqual({ onBehalfOf: undefined });
+  });
+
+  it('createServer refuses to bind the token user when an identity is required', () => {
+    expect(() => createServer({ client: makeClient([]), requireOnBehalfOf: true })).toThrow(/identity is required/);
+    expect(() => createServer({ client: makeClient([]), requireOnBehalfOf: true, onBehalfOf: ' ' })).toThrow();
+    expect(() =>
+      createServer({ client: makeClient([]), requireOnBehalfOf: true, onBehalfOf: 'u@example.com' }),
+    ).not.toThrow();
+    // stdio keeps the token-user fallback.
+    expect(() => createServer({ client: makeClient([]) })).not.toThrow();
+  });
+});
+
+describe('http hardening', () => {
+  it('compares the bearer token in constant time and rejects mismatches', () => {
+    expect(tokensMatch('Bearer s3cret', 'Bearer s3cret')).toBe(true);
+    expect(tokensMatch('Bearer s3cre', 'Bearer s3cret')).toBe(false);
+    expect(tokensMatch(undefined, 'Bearer s3cret')).toBe(false);
+    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: 's3cret' };
+    expect(() => assertAuthorized({ headers: { authorization: 'Bearer nope' } } as unknown as IncomingMessage, config))
+      .toThrow(HttpRequestError);
+    expect(() =>
+      assertAuthorized({ headers: { authorization: 'Bearer s3cret' } } as unknown as IncomingMessage, config),
+    ).not.toThrow();
+  });
+
+  it('refuses to start when the trust flag is on without MCP_HTTP_TOKEN', () => {
+    process.env.ZAMMAD_TRUST_FORWARDED_USER = 'true';
+    expect(() => assertSafeHttpStartup({ host: 'h', port: 0, maxBodyBytes: 1 })).toThrow(/MCP_HTTP_TOKEN/);
+    expect(() => assertSafeHttpStartup({ host: 'h', port: 0, maxBodyBytes: 1, httpToken: 't' })).not.toThrow();
+    delete process.env.ZAMMAD_TRUST_FORWARDED_USER;
+    expect(() => assertSafeHttpStartup({ host: 'h', port: 0, maxBodyBytes: 1 })).not.toThrow();
+  });
+});
+
+describe('path parameter guard', () => {
+  it.each(['', '.', '..', 'a/b', 'a\\b', 'a?b', 'a#b', '%2e%2e', '%2F', '..%2f'])('rejects %j', value => {
+    expect(() => pathSegment(value)).toThrow(/Invalid path parameter/);
+  });
+
+  it('accepts and encodes ordinary values', () => {
+    expect(pathSegment(42)).toBe('42');
+    expect(pathSegment('a b')).toBe('a%20b');
+  });
+
+  it('is applied to user lookups', async () => {
+    const record: Recorded[] = [];
+    await expect(listUsers(makeClient(record), { userId: '..' as unknown as number })).rejects.toThrow(
+      /Invalid path parameter/,
+    );
+    expect(record).toHaveLength(0);
   });
 });
