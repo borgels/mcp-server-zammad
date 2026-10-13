@@ -1,4 +1,5 @@
 import type { ZammadClient } from './client.js';
+import { pathSegment } from './path.js';
 import { MAX_PER_PAGE } from './tickets.js';
 
 export async function whoami(client: ZammadClient): Promise<unknown> {
@@ -24,7 +25,7 @@ export interface ListUsersInput {
 
 export async function listUsers(client: ZammadClient, input: ListUsersInput = {}): Promise<unknown> {
   if (input.userId) {
-    return client.get(`/users/${input.userId}`, { expand: true });
+    return client.get(`/users/${pathSegment(input.userId)}`, { expand: true });
   }
   const pagination = {
     page: input.page ?? 1,
@@ -40,20 +41,57 @@ export async function listUsers(client: ZammadClient, input: ListUsersInput = {}
 export interface ManageUserInput {
   action: 'create' | 'update';
   userId?: number;
-  /** Zammad user fields: email, firstname, lastname, organization, phone, note, … */
+  /** Zammad user fields — only MANAGE_USER_FIELDS are accepted. */
   payload: Record<string, unknown>;
 }
 
 /**
+ * Profile/contact fields a technician may set. Everything else — roles,
+ * group access, secondary organizations, passwords, login, active flag,
+ * permissions — is refused and stays in the Zammad admin UI.
+ */
+export const MANAGE_USER_FIELDS: ReadonlySet<string> = new Set([
+  'firstname',
+  'lastname',
+  'email',
+  'phone',
+  'mobile',
+  'fax',
+  'web',
+  'department',
+  'address',
+  'street',
+  'zip',
+  'city',
+  'country',
+  'note',
+  'vip',
+  'organization',
+  'organization_id',
+]);
+
+/** Fields only accepted on create (changing them later could rebind an identity). */
+const CREATE_ONLY_FIELDS: ReadonlySet<string> = new Set(['email']);
+
+/**
  * Create/update customers (e.g. register a new employee so tickets can be
- * opened for them). Role/password/permission changes are refused — those
- * belong in the Zammad admin UI.
+ * opened for them). Only an explicit allowlist of profile/contact fields is
+ * forwarded; role/group/organization-association/password changes belong in
+ * the Zammad admin UI.
  */
 export async function manageUser(client: ZammadClient, input: ManageUserInput): Promise<unknown> {
-  const forbidden = ['role_ids', 'roles', 'password', 'group_ids', 'permissions'];
-  const used = forbidden.filter(key => key in input.payload);
-  if (used.length > 0) {
-    throw new Error(`Refusing to set ${used.join(', ')} — roles/passwords/groups are managed in the Zammad admin UI.`);
+  const keys = Object.keys(input.payload);
+  const refused = keys.filter(
+    key => !MANAGE_USER_FIELDS.has(key) || (input.action === 'update' && CREATE_ONLY_FIELDS.has(key)),
+  );
+  if (refused.length > 0) {
+    throw new Error(
+      `Refusing to set ${refused.join(', ')} — only ${[...MANAGE_USER_FIELDS].join(', ')} can be set here ` +
+        '(email only on create); roles, groups, organization memberships and passwords are managed in the Zammad admin UI.',
+    );
+  }
+  if (keys.length === 0) {
+    throw new Error('payload must contain at least one field.');
   }
 
   if (input.action === 'create') {
@@ -62,7 +100,7 @@ export async function manageUser(client: ZammadClient, input: ManageUserInput): 
   if (!input.userId) {
     throw new Error('userId is required for action=update.');
   }
-  return client.put(`/users/${input.userId}`, input.payload);
+  return client.put(`/users/${pathSegment(input.userId)}`, input.payload);
 }
 
 export async function listOrganizations(
@@ -70,7 +108,7 @@ export async function listOrganizations(
   input: { query?: string; organizationId?: number } = {},
 ): Promise<unknown> {
   if (input.organizationId) {
-    return client.get(`/organizations/${input.organizationId}`, { expand: true });
+    return client.get(`/organizations/${pathSegment(input.organizationId)}`, { expand: true });
   }
   if (input.query) {
     return client.get('/organizations/search', { query: input.query, expand: true });

@@ -1,4 +1,5 @@
 import type { ZammadClient, QueryValue } from './client.js';
+import { pathSegment } from './path.js';
 import { profile } from './policy.js';
 
 export const MAX_PER_PAGE = 100;
@@ -28,11 +29,11 @@ export async function getTicket(
   client: ZammadClient,
   input: { ticketId: number; includeArticles?: boolean },
 ): Promise<unknown> {
-  const ticket = await client.get(`/tickets/${input.ticketId}`, { expand: true });
+  const ticket = await client.get(`/tickets/${pathSegment(input.ticketId)}`, { expand: true });
   if (input.includeArticles === false) {
     return ticket;
   }
-  const articles = await client.get(`/ticket_articles/by_ticket/${input.ticketId}`, { expand: true });
+  const articles = await client.get(`/ticket_articles/by_ticket/${pathSegment(input.ticketId)}`, { expand: true });
   return { ticket, articles };
 }
 
@@ -133,7 +134,7 @@ export async function updateTicket(client: ZammadClient, input: UpdateTicketInpu
   if (Object.keys(body).length === 0) {
     throw new Error('Nothing to update — provide at least one field.');
   }
-  return client.put(`/tickets/${input.ticketId}`, body);
+  return client.put(`/tickets/${pathSegment(input.ticketId)}`, body);
 }
 
 export interface DownloadAttachmentInput {
@@ -151,7 +152,7 @@ export async function downloadAttachment(client: ZammadClient, input: DownloadAt
 }> {
   const maxBytes = Math.min(input.maxBytes ?? DEFAULT_ATTACHMENT_CAP, MAX_ATTACHMENT_CAP);
   const { bytes, contentType } = await client.getBinary(
-    `/ticket_attachment/${input.ticketId}/${input.articleId}/${input.attachmentId}`,
+    `/ticket_attachment/${pathSegment(input.ticketId)}/${pathSegment(input.articleId)}/${pathSegment(input.attachmentId)}`,
     maxBytes,
   );
   const isText = /^(text\/|application\/(json|xml|csv))/.test(contentType);

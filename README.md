@@ -7,13 +7,19 @@ MCP server for the [Zammad](https://docs.zammad.org/en/latest/api/intro.html) he
 One image, two tool sets, selected by `ZAMMAD_PROFILE`:
 
 - **`user`** — employee self-service: `zammad_create_ticket`, `zammad_list_tickets`, `zammad_get_ticket` (full conversation), `zammad_reply_ticket` (always public), `zammad_update_ticket` (title/state only), `zammad_download_attachment`, `zammad_search_knowledge_base`, `zammad_whoami`.
-- **`technician`** — everything above plus `zammad_search_tickets` (Elasticsearch syntax), internal notes + article-type control on replies (type `email` really sends mail), owner/priority/group on updates, ticket creation on behalf of customers (unknown emails auto-created via Zammad's `guess:` syntax), `zammad_list_users` / `zammad_manage_user` (roles/passwords/groups refused), `zammad_list_organizations`, `zammad_manage_tags`, `zammad_list_reference_data`.
+- **`technician`** — everything above plus `zammad_search_tickets` (Elasticsearch syntax), internal notes + article-type control on replies (type `email` really sends mail), owner/priority/group on updates, ticket creation on behalf of customers (unknown emails auto-created via Zammad's `guess:` syntax), `zammad_list_users` / `zammad_manage_user` (explicit allowlist of profile/contact fields; roles, groups, organization memberships and passwords refused; email only on create), `zammad_list_organizations`, `zammad_manage_tags`, `zammad_list_reference_data`.
 
 **No delete tools** — ticket and user deletion is permanent in Zammad and stays in the admin UI.
 
 ## Identity
 
-The HTTP transport reads `X-MCP-User` (set by your gateway from a verified token) and binds it per request when `ZAMMAD_TRUST_FORWARDED_USER=true`. The API token needs `admin.user` for impersonation. Without a forwarded user, calls run as the token user.
+The HTTP transport reads `X-MCP-User` (set by your gateway from a verified token) and binds it per request when `ZAMMAD_TRUST_FORWARDED_USER=true`. The API token needs `admin.user` for impersonation.
+
+The HTTP transport fails closed:
+
+- With `ZAMMAD_TRUST_FORWARDED_USER=true`, `MCP_HTTP_TOKEN` must be set (the server refuses to start otherwise), and every request without a valid `X-MCP-User` is rejected with 401.
+- With the trust flag off, requests are rejected unless `ZAMMAD_ALLOW_TOKEN_USER=true` is set explicitly, in which case every request runs as the API token user (single-user / trusted-network deployments only).
+- stdio always runs as the token user.
 
 ## Configuration
 

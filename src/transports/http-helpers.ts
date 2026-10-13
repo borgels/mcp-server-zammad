@@ -1,4 +1,6 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { allowTokenUser, isValidForwardedUser, trustForwardedUser } from '../zammad/policy.js';
 
 export class HttpRequestError extends Error {
   readonly status: number;
@@ -31,9 +33,68 @@ export function assertAuthorized(req: IncomingMessage, config = getHttpConfig())
     return;
   }
 
-  if (req.headers.authorization !== `Bearer ${config.httpToken}`) {
+  if (!tokensMatch(req.headers.authorization, `Bearer ${config.httpToken}`)) {
     throw new HttpRequestError(401, 'Unauthorized');
   }
+}
+
+/** Constant-time comparison (hashing both sides first equalizes lengths). */
+export function tokensMatch(provided: string | undefined, expected: string): boolean {
+  if (typeof provided !== 'string') {
+    return false;
+  }
+  const a = createHash('sha256').update(provided, 'utf8').digest();
+  const b = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * Refuse to start an HTTP deployment that trusts a forwarded identity
+ * header without requiring the shared gateway token: anyone who can reach
+ * the port could otherwise pick the identity they act as.
+ */
+export function assertSafeHttpStartup(config = getHttpConfig()): void {
+  if (trustForwardedUser() && !config.httpToken) {
+    throw new Error(
+      'Refusing to start: ZAMMAD_TRUST_FORWARDED_USER=true requires MCP_HTTP_TOKEN to be set, ' +
+        'otherwise any client could choose the X-MCP-User identity.',
+    );
+  }
+}
+
+/**
+ * Resolve the identity an HTTP request acts as. Fails closed: without a
+ * trusted, well-formed X-MCP-User the request is rejected, unless the
+ * operator explicitly opted into token-user mode (ZAMMAD_ALLOW_TOKEN_USER=true
+ * with the forwarded-user trust flag off).
+ */
+export function resolveHttpIdentity(req: IncomingMessage): { onBehalfOf?: string } {
+  if (trustForwardedUser()) {
+    const forwarded = firstHeaderValue(req.headers['x-mcp-user']);
+    if (!forwarded) {
+      throw new HttpRequestError(401, 'Missing verified user identity (X-MCP-User).');
+    }
+    if (!isValidForwardedUser(forwarded)) {
+      throw new HttpRequestError(400, 'Invalid X-MCP-User value.');
+    }
+    return { onBehalfOf: forwarded };
+  }
+
+  if (allowTokenUser()) {
+    return { onBehalfOf: undefined };
+  }
+
+  throw new HttpRequestError(
+    401,
+    'No verified user identity: set ZAMMAD_TRUST_FORWARDED_USER=true behind a gateway, ' +
+      'or ZAMMAD_ALLOW_TOKEN_USER=true to run every request as the API token user.',
+  );
+}
+
+export function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function assertAllowedOrigin(req: IncomingMessage): void {
