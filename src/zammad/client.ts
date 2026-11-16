@@ -1,4 +1,9 @@
-import { ZammadHttpError } from '../errors.js';
+import { ConfigError, readEnvInteger } from '../config-env.js';
+import { describeUrl, registerSecret, ZammadHttpError } from '../errors.js';
+
+/** Error responses are read up to this many bytes. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+const MAX_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface ZammadClientOptions {
   apiToken?: string;
@@ -28,6 +33,7 @@ export class ZammadClient {
 
   constructor(options: ZammadClientOptions = {}) {
     this.apiToken = options.apiToken ?? process.env.ZAMMAD_API_TOKEN;
+    registerSecret(this.apiToken);
     const root = trimTrailingSlash(options.baseUrl ?? process.env.ZAMMAD_BASE_URL ?? '');
     if (!root) {
       throw new Error('Missing ZAMMAD_BASE_URL (e.g. https://yourcompany.zammad.com).');
@@ -36,7 +42,10 @@ export class ZammadClient {
     this.baseUrl = root.endsWith('/api/v1') ? root : `${root}/api/v1`;
     this.onBehalfOf = options.onBehalfOf?.trim() || undefined;
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.ZAMMAD_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs = options.timeoutMs ?? readEnvInteger('ZAMMAD_TIMEOUT_MS', 30_000, { max: MAX_TIMEOUT_MS });
+    if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1) {
+      throw new ConfigError('timeoutMs must be a positive integer.');
+    }
   }
 
   /** A copy of this client acting as the given user (or as the token user when undefined). */
@@ -68,20 +77,28 @@ export class ZammadClient {
     const response = await this.fetchImpl(url, {
       method: 'GET',
       headers: this.headers(),
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+    assertNotRedirect(response, 'GET', url);
 
     if (!response.ok) {
-      const payload = await readResponseBody(response);
+      const payload = await readErrorBody(response);
       throw new ZammadHttpError({ status: response.status, url, payload });
     }
 
-    const buffer = new Uint8Array(await response.arrayBuffer());
-    if (buffer.byteLength > maxBytes) {
-      throw new Error(`Attachment is ${buffer.byteLength} bytes which exceeds the ${maxBytes} byte limit.`);
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`Attachment is ${declared} bytes which exceeds the ${maxBytes} byte limit.`);
+    }
+    // The cap is enforced while streaming, so an oversized body is never fully buffered.
+    const { bytes, exceeded } = await readUpTo(response, maxBytes);
+    if (exceeded) {
+      throw new Error(`Attachment exceeds the ${maxBytes} byte limit.`);
     }
     return {
-      bytes: buffer,
+      bytes,
       contentType: response.headers.get('content-type') ?? 'application/octet-stream',
     };
   }
@@ -120,6 +137,10 @@ export class ZammadClient {
     const init: RequestInit = {
       method,
       headers,
+      // Never follow redirects: the token would be re-sent to wherever the
+      // Location points (Authorization is only dropped cross-origin, and the
+      // From impersonation header is never dropped).
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     };
 
@@ -129,9 +150,10 @@ export class ZammadClient {
     }
 
     const response = await this.fetchImpl(url, init);
-    const responseBody = await readResponseBody(response);
+    assertNotRedirect(response, method, url);
 
     if (!response.ok) {
+      const responseBody = await readErrorBody(response);
       throw new ZammadHttpError({
         status: response.status,
         url,
@@ -141,7 +163,69 @@ export class ZammadClient {
       });
     }
 
-    return responseBody as T;
+    return (await readResponseBody(response)) as T;
+  }
+}
+
+function assertNotRedirect(response: Response, method: string, url: string): void {
+  // With redirect: 'manual', fetch returns the 3xx itself (or an opaque
+  // redirect with status 0 in browser-like runtimes).
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error(
+      `Zammad API responded with a redirect (HTTP ${response.status}) for ${method} ${describeUrl(url)}; ` +
+        'redirects are not followed. Check that ZAMMAD_BASE_URL is the final https:// address of the instance.',
+    );
+  }
+}
+
+/** Read at most `limit` bytes of the body; cancels the rest and reports whether it was longer. */
+async function readUpTo(response: Response, limit: number): Promise<{ bytes: Uint8Array; exceeded: boolean }> {
+  if (!response.body) {
+    return { bytes: new Uint8Array(0), exceeded: false };
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let exceeded = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (total + value.byteLength > limit) {
+      chunks.push(value.subarray(0, limit - total));
+      total = limit;
+      exceeded = true;
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { bytes, exceeded };
+}
+
+/** Error bodies are read up to a small limit; JSON is parsed only when complete. */
+async function readErrorBody(response: Response): Promise<unknown> {
+  const { bytes, exceeded } = await readUpTo(response, MAX_ERROR_BODY_BYTES);
+  const text = new TextDecoder().decode(bytes);
+  if (!text) {
+    return null;
+  }
+  if (exceeded) {
+    return text;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
   }
 }
 
