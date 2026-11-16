@@ -11,9 +11,9 @@
  *    notes, user/organization management, and tags. Also impersonated,
  *    so actions are attributed to the actual technician.
  *
- * Identity comes from the gateway as X-MCP-User and is only honored when
- * ZAMMAD_TRUST_FORWARDED_USER=true (the header is stripped from public
- * traffic by the gateway; only the internal network can set it).
+ * Identity comes from an authenticating proxy as X-MCP-User and is only
+ * honored when ZAMMAD_TRUST_FORWARDED_USER=true (the proxy must strip the
+ * header from client traffic and set it itself; MCP_HTTP_TOKEN is required).
  *
  * Over HTTP the server fails closed: a request without a trusted identity
  * is rejected instead of silently running as the (admin) token user. The
