@@ -25,10 +25,74 @@ export const WRITE_TOOL_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-const IDENTITY_NOTE =
+export const IDENTITY_NOTE =
   'Runs as the requesting user (gateway identity → Zammad From header) — Zammad enforces their real permissions and attributes the action to them.';
 
+/** The embedded gateway's note: it never impersonates. */
+export const TOKEN_USER_NOTE =
+  "Runs as the Zammad user who owns the access token; Zammad enforces that user's permissions and records the action as theirs.";
+
 export const ZAMMAD_CAPABILITIES: ZammadCapability[] = [
+  {
+    id: 'zammad_check_connection',
+    title: 'Check Zammad connection',
+    description: 'Verify that Zammad accepts the access token, and show the user it belongs to with roles.',
+    risk: 'read',
+    examples: [{}],
+    identifierFormats: [],
+    safetyNotes: [TOKEN_USER_NOTE],
+    keywords: ['connection', 'forbindelse', 'whoami', 'me', 'identity', 'hvem'],
+  },
+  {
+    id: 'zammad_add_note',
+    title: 'Add internal note (Zammad)',
+    description: 'Add an internal note to a ticket. The customer cannot see it and no email is sent.',
+    risk: 'write',
+    examples: [{ ticketId: 42, body: 'Ringet til kunden, venter på svar.' }],
+    identifierFormats: ['ticketId (number)'],
+    safetyNotes: ['Notes cannot be edited or deleted afterwards (Zammad articles are immutable).'],
+    keywords: ['note', 'intern note', 'kommentar', 'internal'],
+  },
+  {
+    id: 'zammad_send_reply',
+    title: 'Send reply to customer (Zammad)',
+    description: 'Send a reply to the ticket customer as a real email from Zammad, and add it to the ticket.',
+    risk: 'write',
+    examples: [{ ticketId: 42, body: 'Tak for din henvendelse. Det er løst nu.' }],
+    identifierFormats: ['ticketId (number)'],
+    safetyNotes: ['Sends an email to the customer. It cannot be recalled, edited or deleted afterwards.'],
+    keywords: ['reply', 'svar', 'email', 'mail', 'kunde', 'besked'],
+  },
+  {
+    id: 'zammad_list_tags',
+    title: 'List ticket tags (Zammad)',
+    description: 'List the tags on a ticket.',
+    risk: 'read',
+    examples: [{ ticketId: 42 }],
+    identifierFormats: ['ticketId (number)'],
+    safetyNotes: [],
+    keywords: ['tags', 'labels', 'mærker'],
+  },
+  {
+    id: 'zammad_add_tag',
+    title: 'Add ticket tag (Zammad)',
+    description: 'Add one tag to a ticket.',
+    risk: 'write',
+    examples: [{ ticketId: 42, tag: 'hardware' }],
+    identifierFormats: ['ticketId (number)'],
+    safetyNotes: [],
+    keywords: ['tags', 'labels', 'tilføj', 'kategorisering'],
+  },
+  {
+    id: 'zammad_remove_tag',
+    title: 'Remove ticket tag (Zammad)',
+    description: 'Remove one tag from a ticket.',
+    risk: 'write',
+    examples: [{ ticketId: 42, tag: 'hardware' }],
+    identifierFormats: ['ticketId (number)'],
+    safetyNotes: [],
+    keywords: ['tags', 'labels', 'fjern', 'kategorisering'],
+  },
   {
     id: 'zammad_search_capabilities',
     title: 'Search Zammad Capabilities',
@@ -191,7 +255,7 @@ export const ZAMMAD_CAPABILITIES: ZammadCapability[] = [
   },
 ];
 
-export function searchCapabilities(query: string, limit = 20, available?: Set<string>): ZammadCapability[] {
+export function searchCapabilities(query: string, limit = 20, available?: ReadonlySet<string>): ZammadCapability[] {
   const pool = available
     ? ZAMMAD_CAPABILITIES.filter(capability => available.has(capability.id))
     : ZAMMAD_CAPABILITIES;

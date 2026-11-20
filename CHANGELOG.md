@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.0 (2026-11-20)
+
+The gateway entry point (`./gateway`) in the shape of `mcp-server-template`,
+for hosts that run one instance per tenant in a shared process.
+
+### Changes
+
+- `createZammadGateway({ apiToken, baseUrl, fetchImpl?, timeoutMs?, resolveHost?, policy? })`:
+  the token and the customer's Zammad address are required and never read
+  from the environment; the gateway reads no `ZAMMAD_*` variable. It never
+  impersonates (no `From`/`X-On-Behalf-Of`) and always has the technician
+  tool set.
+- `normalizeZammadBaseUrl(url)`: https and a public host name only (no user
+  info, port, path, query or fragment, no IP address or local name). Every
+  connection of a gateway goes only to public addresses, checked by DNS per
+  connection (built-in fetch) or before every request (host fetch).
+- Tools: reads `search_capabilities`, `check_connection`, `list_tickets`,
+  `search_tickets`, `get_ticket`, `search_knowledge_base`, `list_users`,
+  `list_organizations`, `list_reference_data`, `list_tags`; writes (off by
+  default) `create_ticket`, `add_note` (internal note), `send_reply` (email
+  to the customer), `update_ticket`, `add_tag`, `remove_tag`, `manage_user`.
+  No delete, no attachment download.
+- `zammadToolCatalog`: deeply frozen, with `inputSchema` from the strict zod
+  schema, `upstream` and `broad`.
+- Token admission, host policy `{ enableWrites, disabledTools, audit }`, call
+  scopes, redaction per instance, the sink check and sealed construction
+  errors, as in the template.
+- Errors are our own text: `Zammad API request failed with HTTP <status>`
+  with our hint and `retry-after`; Zammad's error bodies are no longer read,
+  also in the MCP server. Redirects, network failures and timeouts are
+  worded by us and quote neither the address nor the cause.
+- The audit records an error as a fixed code (`http_<status>`, `timeout`,
+  `error`) instead of its message, also in the MCP server.
+
+### Upgrade notes
+
+- Node 22.19 or later (the gateway uses `undici` and `ipaddr.js`).
+- MCP server error texts no longer include Zammad's `error_human` text.
+
 ## 0.2.0
 
 ### Upgrade notes
