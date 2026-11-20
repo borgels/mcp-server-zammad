@@ -45,6 +45,154 @@ Numeric settings such as `ZAMMAD_TIMEOUT_MS` must be plain integers; an invalid 
 
 `GET /healthz` answers `{"status":"ok"}` without authentication. The server shuts down gracefully on SIGTERM/SIGINT.
 
+## Embedding (`./gateway`)
+
+`mcp-server-zammad/gateway` lets a host application run the tools in-process
+instead of over MCP, in the same shape as `mcp-server-template`. One process
+can run several gateway instances, for example one per tenant.
+
+```ts
+import { createZammadGateway, normalizeZammadBaseUrl, zammadToolCatalog } from 'mcp-server-zammad/gateway';
+
+// Before storing an address a customer typed: throws GatewayConfigError, or returns https://<host>.
+const baseUrl = normalizeZammadBaseUrl(input.address);
+
+const gateway = createZammadGateway({
+  apiToken: tenant.zammadToken,
+  baseUrl,
+  policy: { enableWrites: true, audit: record => log(record) },
+});
+const result = await gateway.callTool('list_tickets', { query: 'state.name:open' }, { caller: 'user-1' });
+```
+
+The module exports:
+
+- `createZammadGateway({ apiToken, baseUrl, fetchImpl?, timeoutMs?, resolveHost?, policy? })`.
+  `apiToken` is a Zammad personal access token (sent as
+  `Authorization: Bearer`), `baseUrl` the customer's Zammad address
+  (`https://company.zammad.com` or a self-hosted https address; the client adds
+  `/api/v1`). Both are required and never read from the environment. The
+  gateway reads no `ZAMMAD_*` variable at all: not `ZAMMAD_API_TOKEN`,
+  `ZAMMAD_BASE_URL`, `ZAMMAD_PROFILE` (the gateway always has the technician
+  tool set), `ZAMMAD_TRUST_FORWARDED_USER`/`ZAMMAD_ALLOW_TOKEN_USER`,
+  `ZAMMAD_TIMEOUT_MS` (default 30 seconds), `ZAMMAD_DEFAULT_GROUP` (a ticket
+  without a group goes to `Users`) or `ZAMMAD_AUDIT_LOG`.
+- **No impersonation.** The gateway never sends `From` or `X-On-Behalf-Of`:
+  every call runs as the user who owns the token, with that user's Zammad
+  permissions. Per-person rights are the host's business.
+- `normalizeZammadBaseUrl(url)`: a pure check a host can run before it stores
+  an address. It returns `https://<host>` (lower case, no trailing slash or
+  dot) or throws `GatewayConfigError` with a message starting
+  `Zammad address refused:` (`ADDRESS_REFUSED`) that never quotes the value.
+  Refused: anything but `https://`, a user name or password, a port, a path,
+  a query string or a fragment, an IP address, `localhost` and local or
+  single-label names (`.local`, `.internal`, `.lan`, `.home.arpa`, ...).
+- `gateway.tools` (the tools enabled on the instance) and
+  `gateway.callTool(name, input, { caller, requestId })`. Names are accepted
+  with or without the `zammad_` prefix. Input is validated with the tool's zod
+  schema before anything is sent, and unknown fields are refused. The audit
+  records of a call hold `caller` only as an HMAC pseudonym (a per-process
+  key) and a request id of the server's own; the host's `requestId` is not
+  written. An error is recorded as a fixed code (`http_<status>`, `timeout`
+  or `error`), never as its message.
+- `zammadGatewayTools`: the definitions (`name` without prefix, `title`,
+  `description`, `riskLevel`, `enabledByDefault`, `inputSchema` as JSON
+  Schema derived from the zod schema the call is validated with).
+- `zammadToolCatalog`: the same tools, deeply frozen, with `upstream` (method
+  and path template of every Zammad request the tool may make) and `broad`
+  (no Zammad tool is broad).
+- `GatewayConfigError`, `KEY_REFUSED`, `ADDRESS_REFUSED`,
+  `PRIVATE_ADDRESS_REFUSED` and the types (`ZammadGatewayOptions`,
+  `ZammadGateway`, `InstancePolicy`, `AuditSink`, `GatewayToolDefinition`,
+  `GatewayToolCatalogEntry`, `GatewayUpstreamOperation`, `GatewayToolResult`,
+  `GatewayCallContext` and the JSON types such as `GatewayJsonObject`).
+
+| Tool | Risk | Default | Zammad requests (on `baseUrl`) |
+|---|---|---|---|
+| `search_capabilities` | read | on | none |
+| `check_connection` | read | on | `GET /api/v1/users/me` |
+| `list_tickets` | read | on | `GET /api/v1/tickets`, `GET /api/v1/tickets/search` |
+| `search_tickets` | read | on | `GET /api/v1/tickets/search` |
+| `get_ticket` | read | on | `GET /api/v1/tickets/{ticketId}`, `GET /api/v1/ticket_articles/by_ticket/{ticketId}` |
+| `search_knowledge_base` | read | on | `GET /api/v1/search`, `GET /api/v1/knowledge_bases/{knowledgeBaseId}/answers/{answerId}` |
+| `list_users` | read | on | `GET /api/v1/users`, `GET /api/v1/users/search`, `GET /api/v1/users/{userId}` |
+| `list_organizations` | read | on | `GET /api/v1/organizations`, `GET /api/v1/organizations/search`, `GET /api/v1/organizations/{organizationId}` |
+| `list_reference_data` | read | on | `GET /api/v1/groups`, `GET /api/v1/ticket_states`, `GET /api/v1/ticket_priorities` |
+| `list_tags` | read | on | `GET /api/v1/tags` |
+| `create_ticket` | write | off | `POST /api/v1/tickets` |
+| `add_note` | write | off | `POST /api/v1/ticket_articles` (internal note) |
+| `send_reply` | write | off | `GET /api/v1/tickets/{ticketId}`, `GET /api/v1/users/{userId}`, `POST /api/v1/ticket_articles` (email to the customer) |
+| `update_ticket` | write | off | `PUT /api/v1/tickets/{ticketId}` |
+| `add_tag` | write | off | `POST /api/v1/tags/add` |
+| `remove_tag` | write | off | `POST /api/v1/tags/remove` |
+| `manage_user` | write | off | `POST /api/v1/users`, `PUT /api/v1/users/{userId}` |
+
+`add_note` adds an internal note (the customer does not see it, no mail is
+sent). `send_reply` makes Zammad **send a real email** to the ticket's
+customer (the customer's email address, the ticket title as subject). There
+are no delete tools, and no attachment download in the gateway. Read tools
+get a client that can only `GET`. The MCP server's own tools
+(`zammad_reply_ticket`, `zammad_manage_tags`, ...) are unchanged.
+
+**Address and network.** Every connection goes only to public addresses:
+the host name is resolved and every address must be public unicast
+(private, loopback, link-local, carrier-grade NAT, unique local, metadata
+and documentation ranges, and IPv4 embedded in IPv6 are refused). With the
+built-in fetch the check runs in the connection's own lookup, so the address
+checked is the address used (DNS rebinding is checked per connection). With
+a host `fetchImpl` the name is checked before every request. A refusal
+happens at the call, not at construction, as an error result
+`Refused: the Zammad address points to a private or local network address.`
+(`PRIVATE_ADDRESS_REFUSED`); a name that does not resolve gives
+`Network error calling the Zammad API (GET) (ENOTFOUND).` Redirects are never
+followed.
+
+**Instance policy.** With `policy: { enableWrites, disabledTools, audit }`
+the host decides the instance's policy: write tools run only with
+`enableWrites: true`; disabled tools are left out of `tools` (and out of
+`search_capabilities`) and refused when called; audit records go to `audit`
+(none without it). `disabledTools` must name gateway tools. A sink that
+throws on a start record refuses the call. Without `policy` the instance uses
+the default policy (no writes, no disabled tools, no audit records). Every
+call runs in a call scope of its own (AsyncLocalStorage), so a call made from
+inside another instance's call never inherits its policy, sink, redactor or
+caller. There is no process-wide registry of secrets.
+
+**Results.** A successful result is a short English summary line, a blank
+line and the data as compact JSON, exactly equal to `structuredContent`. The
+data is redacted twice before it is serialised: credential-shaped text
+(Authorization headers, Bearer, Basic and `Token token=` values, JSON Web
+Tokens, credential assignments) and the value of credential-named fields are
+masked, and the instance's token (exact, encoded, and any piece of 6
+characters or more, in strings, keys and the string form of numbers) is
+replaced by `‹redacted›`. An answer from Zammad that is not JSON is refused.
+
+**Errors.** An error result carries our own English text, never Zammad's
+response body or message, a redirect's `Location` or the configured address.
+An HTTP failure starts with `Zammad API request failed with HTTP <status>`,
+followed by our own hint (401, 403, 404, 422, 429) and the parsed
+`retry-after` where there is one. Other errors start with
+`Invalid input for <tool>:`, `Unsupported Zammad gateway tool.`,
+`Zammad API responded with a redirect (HTTP <status>)`,
+`Network error calling the Zammad API`, `Zammad API request timed out after`,
+`Zammad answered with something that is not JSON`, `Refused: the Zammad
+address points to a private or local network address.`, or a policy
+refusal (`writes are disabled. ...`, `tool is disabled on this instance by
+the embedding host: <tool>`).
+
+**Token admission and the sink check.** A gateway accepts only a token of
+printable ASCII (0x21-0x7E) of at least 16 characters that shares no piece of
+6 characters with a string literal in `src/` (`src/fixed-corpus.generated.ts`,
+kept up to date by a test), with the fixed fallbacks (`src/fallbacks.ts`) or
+with the tool list. A refused token throws `GatewayConfigError` at
+construction (`options.apiToken: A credential was refused: ...`), before
+anything is built or sent; the refusal holds no piece of the token, and every
+error a gateway throws has no `cause` and a `stack` of only `name: message`.
+As the very last step every output (the tool list, each result, each audit
+record) is checked in its final form, and one that still holds a piece of the
+token is replaced by a fixed fallback. Whether Zammad accepts the token is
+only known at the first call (`check_connection`: HTTP 401).
+
 ## Security model
 
 - The server calls Zammad with one configured API token. With `ZAMMAD_TRUST_FORWARDED_USER=true` each request is executed as the forwarded user via Zammad's `From` impersonation header, so Zammad's permissions for that user apply; otherwise every request runs as the token user.

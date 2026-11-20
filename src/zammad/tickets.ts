@@ -1,6 +1,7 @@
 import type { ZammadClient, QueryValue } from './client.js';
 import { pathSegment } from './path.js';
 import { profile } from './policy.js';
+import { currentInstancePolicy } from './scope.js';
 
 export const MAX_PER_PAGE = 100;
 const DEFAULT_ATTACHMENT_CAP = 2 * 1024 * 1024;
@@ -57,7 +58,8 @@ export async function createTicket(client: ZammadClient, input: CreateTicketInpu
   }
   return client.post('/tickets', {
     title: input.title,
-    group: input.group ?? process.env.ZAMMAD_DEFAULT_GROUP ?? 'Users',
+    // An embedded gateway never reads ZAMMAD_DEFAULT_GROUP: without a group the ticket goes to Zammad's default "Users".
+    group: input.group ?? (currentInstancePolicy() ? undefined : process.env.ZAMMAD_DEFAULT_GROUP) ?? 'Users',
     ...(input.customer ? { customer_id: `guess:${input.customer}` } : {}),
     priority_id: input.priorityId,
     tags: input.tags,
@@ -97,6 +99,48 @@ export async function replyTicket(client: ZammadClient, input: ReplyTicketInput)
     type: technician ? (input.articleType ?? 'note') : 'web',
     content_type: 'text/plain',
     internal: input.internal ?? false,
+  });
+}
+
+/**
+ * An internal note on a ticket: article type "note", internal, so the
+ * customer never sees it and no email is sent.
+ */
+export async function addNote(client: ZammadClient, input: { ticketId: number; body: string }): Promise<unknown> {
+  return client.post('/ticket_articles', {
+    ticket_id: input.ticketId,
+    body: input.body,
+    type: 'note',
+    content_type: 'text/plain',
+    internal: true,
+  });
+}
+
+/**
+ * A reply to the ticket's customer that Zammad SENDS as an email: article
+ * type "email", public, addressed to the customer's email address (as the
+ * Zammad UI does), with the ticket title as subject.
+ */
+export async function sendReply(client: ZammadClient, input: { ticketId: number; body: string }): Promise<unknown> {
+  const ticket = await client.get<{ title?: unknown; customer_id?: unknown }>(`/tickets/${pathSegment(input.ticketId)}`);
+  const customerId = ticket?.customer_id;
+  if (typeof customerId !== 'number' || !Number.isSafeInteger(customerId) || customerId < 1) {
+    throw new Error('The ticket has no customer to reply to; no email was sent.');
+  }
+  const customer = await client.get<{ email?: unknown }>(`/users/${pathSegment(customerId)}`);
+  const to = typeof customer?.email === 'string' ? customer.email.trim() : '';
+  if (!to) {
+    throw new Error("The ticket's customer has no email address; no email was sent.");
+  }
+  return client.post('/ticket_articles', {
+    ticket_id: input.ticketId,
+    to,
+    ...(typeof ticket.title === 'string' && ticket.title ? { subject: ticket.title } : {}),
+    body: input.body,
+    type: 'email',
+    sender: 'Agent',
+    content_type: 'text/plain',
+    internal: false,
   });
 }
 

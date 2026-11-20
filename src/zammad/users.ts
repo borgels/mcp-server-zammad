@@ -16,6 +16,23 @@ export async function whoami(client: ZammadClient): Promise<unknown> {
   };
 }
 
+/** The token's own user: who every call of an embedded gateway runs as, with role names. */
+export async function checkConnection(client: ZammadClient): Promise<unknown> {
+  const me = await client.get<Record<string, unknown>>('/users/me', { expand: true });
+  return {
+    connected: true,
+    user: {
+      id: me.id,
+      login: me.login,
+      firstname: me.firstname,
+      lastname: me.lastname,
+      email: me.email,
+      organization: me.organization,
+      roles: me.roles,
+    },
+  };
+}
+
 export interface ListUsersInput {
   query?: string;
   userId?: number;

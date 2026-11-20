@@ -1,6 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
-import { formatUnknownError } from '../errors.js';
 import { writeAuditEvent } from '../zammad/audit.js';
 import {
   READ_TOOL_ANNOTATIONS,
@@ -29,8 +28,8 @@ import {
   whoami,
 } from '../zammad/users.js';
 
-const ticketIdSchema = z.number().int().positive();
-const pageShape = {
+export const ticketIdSchema = z.number().int().positive();
+export const pageShape = {
   page: z.number().int().min(1).optional(),
   perPage: z.number().int().min(1).max(MAX_PER_PAGE).optional(),
 };
@@ -322,7 +321,7 @@ export function registerZammadTools(server: McpServer, client: ZammadClient): vo
   );
 }
 
-async function runAuditedTool<T>(
+export async function runAuditedTool<T>(
   client: ZammadClient,
   tool: string,
   input: unknown,
@@ -350,7 +349,8 @@ async function runAuditedTool<T>(
       action: 'error',
       target,
       status: 'error',
-      error: formatUnknownError(error),
+      // The error object itself: the audit classifies it into a fixed code (http_<status>, timeout or error).
+      error,
     });
     throw error;
   }
@@ -379,7 +379,7 @@ function auditTarget(input: unknown): unknown {
   };
 }
 
-function jsonToolResult(data: unknown) {
+export function jsonToolResult(data: unknown) {
   return {
     content: [
       {
