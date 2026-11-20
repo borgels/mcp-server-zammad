@@ -1,3 +1,5 @@
+import { currentInstancePolicy } from './scope.js';
+
 /**
  * One image, two profiles — selected by ZAMMAD_PROFILE:
  *
@@ -22,7 +24,11 @@
  */
 export type ZammadProfile = 'user' | 'technician';
 
+/** The profile in effect: an embedded gateway call always has the technician tool set; ZAMMAD_PROFILE is not read. */
 export function profile(): ZammadProfile {
+  if (currentInstancePolicy()) {
+    return 'technician';
+  }
   return process.env.ZAMMAD_PROFILE === 'technician' ? 'technician' : 'user';
 }
 
@@ -66,7 +72,55 @@ const TECHNICIAN_TOOLS = new Set([
   'zammad_list_reference_data',
 ]);
 
+/** The embedded gateway's tools (prefixed names), and which of them change data in Zammad. */
+export const GATEWAY_READ_TOOLS: ReadonlySet<string> = new Set([
+  'zammad_search_capabilities',
+  'zammad_check_connection',
+  'zammad_list_tickets',
+  'zammad_search_tickets',
+  'zammad_get_ticket',
+  'zammad_search_knowledge_base',
+  'zammad_list_users',
+  'zammad_list_organizations',
+  'zammad_list_reference_data',
+  'zammad_list_tags',
+]);
+
+export const GATEWAY_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'zammad_create_ticket',
+  'zammad_add_note',
+  'zammad_send_reply',
+  'zammad_update_ticket',
+  'zammad_add_tag',
+  'zammad_remove_tag',
+  'zammad_manage_user',
+]);
+
+/**
+ * Inside a gateway call (always under an InstancePolicy, src/zammad/scope.ts)
+ * no environment variable is read: a tool the host disabled is refused, and a
+ * write tool runs only when the host enabled writes.
+ */
+function checkHostedToolPolicy(toolName: string): ZammadPolicyDecision {
+  const hosted = currentInstancePolicy()!;
+  if (hosted.disabledTools.has(toolName)) {
+    return { allowed: false, reason: `tool is disabled on this instance by the embedding host: ${toolName}` };
+  }
+  if (GATEWAY_READ_TOOLS.has(toolName)) {
+    return { allowed: true, reason: 'read tool' };
+  }
+  if (GATEWAY_WRITE_TOOLS.has(toolName)) {
+    return hosted.enableWrites
+      ? { allowed: true, reason: 'writes enabled by the embedding host' }
+      : { allowed: false, reason: 'writes are disabled. The embedding host has not enabled writes for this instance.' };
+  }
+  return { allowed: false, reason: 'tool is not a gateway tool.' };
+}
+
 export function checkToolPolicy(toolName: string): ZammadPolicyDecision {
+  if (currentInstancePolicy()) {
+    return checkHostedToolPolicy(toolName);
+  }
   const tools = profile() === 'technician' ? TECHNICIAN_TOOLS : USER_TOOLS;
   if (tools.has(toolName)) {
     return { allowed: true, reason: `allowed in ${profile()} profile` };
