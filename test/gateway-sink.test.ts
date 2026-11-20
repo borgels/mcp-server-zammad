@@ -9,7 +9,7 @@ import { visibleTexts } from '../src/key-admission.js';
 
 const BASE = 'https://helpdesk.example.com';
 const TOKEN = 'qqqqwwwwzzzzxxxx1';
-const resolveHost = async () => ['93.184.216.34'];
+const resolveHost = async () => ['93.184.216.34']; // A public unicast test address, never contacted. hygiene:allow
 let dir: string;
 
 beforeEach(() => {

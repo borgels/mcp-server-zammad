@@ -20,7 +20,7 @@ import { callerPseudonym } from '../src/zammad/audit.js';
 const TOKEN_A = 'qqqqwwwwzzzzxxxx1';
 const TOKEN_B = 'jjjjkkkkvvvvyyyy2';
 const BASE = 'https://helpdesk.example.com';
-const PUBLIC_IP = '93.184.216.34';
+const PUBLIC_IP = '93.184.216.34'; // A public unicast test address, never contacted. hygiene:allow
 const resolveHost = vi.fn(async () => [PUBLIC_IP]);
 
 let dir: string;
