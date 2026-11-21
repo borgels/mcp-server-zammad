@@ -179,6 +179,14 @@ followed by our own hint (401, 403, 404, 422, 429) and the parsed
 address points to a private or local network address.`, or a policy
 refusal (`writes are disabled. ...`, `tool is disabled on this instance by
 the embedding host: <tool>`).
+When Zammad answered with an HTTP error, the error result also has
+`failure: { httpStatus, requestId? }`: the status, and Zammad's request id
+from a response header (`REQUEST_ID_HEADERS` in `src/errors.ts`; Zammad, a
+Rails application, sends `X-Request-Id`) only when it is a hex id of 8 to 64
+characters (one run of hex digits, or groups of four or more joined by single
+hyphens, as in a UUID) and does not hold the shape of a personal number. A
+host can count failures from it without reading their text. Never the
+response body, Zammad's error code or message.
 
 **Token admission and the sink check.** A gateway accepts only a token of
 printable ASCII (0x21-0x7E) of at least 16 characters that shares no piece of
