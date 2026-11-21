@@ -1,5 +1,5 @@
 import { ConfigError, readEnvInteger, readEnvString, type Env } from '../config-env.js';
-import { registerSecret, ZammadHttpError } from '../errors.js';
+import { registerSecret, requestIdFrom, ZammadHttpError } from '../errors.js';
 import { describeUrl, type SecretRedactor } from '../upstream-http.js';
 import { isPublicAddress, pinnedFetch, systemResolve, type ResolveHost } from './network.js';
 
@@ -141,7 +141,12 @@ export class ZammadClient {
 
     if (!response.ok) {
       await discard(response);
-      throw new ZammadHttpError({ status: response.status, method: 'GET', url: describeUrl(url) });
+      throw new ZammadHttpError({
+        status: response.status,
+        method: 'GET',
+        url: describeUrl(url),
+        requestId: requestIdFrom(response.headers),
+      });
     }
 
     const declared = Number(response.headers.get('content-length'));
@@ -221,6 +226,7 @@ export class ZammadClient {
         method,
         url: describeUrl(url),
         retryAfter: response.headers.get('retry-after') ?? undefined,
+        requestId: requestIdFrom(response.headers),
       });
     }
 
