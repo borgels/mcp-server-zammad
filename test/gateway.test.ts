@@ -727,6 +727,39 @@ describe('Zammad gateway acting as a person (actAs)', () => {
     expect(text).not.toContain('nobody@demobyg.example');
   });
 
+  it('refuses when the lookup may have been cut short, so a second user with the email cannot hide on a later page', async () => {
+    const full = Array.from({ length: 100 }, (_, i) => ({ id: i + 1, email: i === 0 ? PERSON : `andre${i}@demobyg.example`, active: true }));
+    const fetchImpl = zammadWithUsers(full);
+    const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!, {
+      actAs: { email: PERSON },
+    });
+    expect(result).toMatchObject({ isError: true, actAsRefused: 'no_user' });
+    expect(new URL(String(fetchImpl.mock.calls[0]![0])).searchParams.get('limit')).toBe('100');
+    expect(fetchImpl.mock.calls).toHaveLength(1);
+  });
+
+  it('keeps each call to its own person when calls run at the same time', async () => {
+    const people: Record<string, number> = { 'a@demobyg.example': 31, 'b@demobyg.example': 32 };
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      if (requestOf(url, init) === 'GET /api/v1/users/search') {
+        const query = new URL(String(url)).searchParams.get('query')!;
+        await new Promise(resolve => setTimeout(resolve, query.startsWith('a') ? 20 : 1));
+        return jsonResponse([{ id: people[query], email: query, active: true }]);
+      }
+      return jsonResponse(DATA);
+    });
+    const gw = gateway(fetchImpl, { policy: { enableWrites: true } });
+    await Promise.all([
+      gw.callTool('add_note', { ticketId: 1, body: 'a' }, { actAs: { email: 'a@demobyg.example' } }),
+      gw.callTool('add_note', { ticketId: 2, body: 'b' }, { actAs: { email: 'b@demobyg.example' } }),
+      gw.callTool('add_note', { ticketId: 3, body: 'c' }),
+    ]);
+    const posts = fetchImpl.mock.calls
+      .filter(([url, init]) => requestOf(url, init) === 'POST /api/v1/ticket_articles')
+      .map(([, init]) => [JSON.parse(String(init!.body)).ticket_id, headersOf(init).From ?? null]);
+    expect(posts.sort()).toEqual([[1, '31'], [2, '32'], [3, null]]);
+  });
+
   it('keeps the read-only view from deleting', async () => {
     const fetchImpl = zammadWithUsers();
     const result = await gateway(fetchImpl).callTool('list_tags', { ticketId: 7 }, { actAs: { email: PERSON } });

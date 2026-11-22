@@ -289,7 +289,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     name: 'create_ticket',
     title: 'Create Zammad ticket',
     description:
-      'Open a new ticket with a title and a first message. The token user is the customer unless customer (an email) is given; an unknown email is created as a new customer. Without group the ticket goes to the group "Users".',
+      'Open a new ticket with a title and a first message. The user it is made as (the person in actAs, or else the token user) is the customer unless customer (an email) is given; an unknown email is created as a new customer. Without group the ticket goes to the group "Users".',
     riskLevel: 'write',
     summary: 'Zammad ticket created.',
     upstream: [findPerson, post('/tickets')],

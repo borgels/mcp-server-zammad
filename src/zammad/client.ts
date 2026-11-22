@@ -14,7 +14,7 @@ export const PRIVATE_ADDRESS_REFUSED = 'Refused: the Zammad address points to a 
 export interface ZammadClientOptions {
   apiToken?: string;
   baseUrl?: string;
-  /** Zammad login/email to impersonate via the From header on every call. Not available to embedded clients. */
+  /** Zammad login/email to impersonate via the From header on every call. Embedded clients use asUser instead. */
   onBehalfOf?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -88,7 +88,7 @@ export class ZammadClient {
       options.embedded.redactor.addSecret(this.apiToken);
       const resolveHost = options.embedded.resolveHost ?? systemResolve;
       this.embedded = { redactor: options.embedded.redactor, resolveHost, hostFetch: options.fetchImpl !== undefined };
-      // Never impersonates: every call runs as the token's own user.
+      // Runs as the token's own user; a change made as a person uses a copy from asUser (numeric id only).
       this.onBehalfOf = undefined;
       // The built-in fetch connects only to public addresses, checked for every new connection (network.ts).
       this.fetchImpl = options.fetchImpl ?? pinnedFetch(resolveHost);
@@ -108,7 +108,7 @@ export class ZammadClient {
   /** A copy of this client acting as the given user (or as the token user when undefined). */
   actingAs(onBehalfOf: string | undefined): ZammadClient {
     if (this.embedded) {
-      throw new Error('An embedded Zammad client does not impersonate.');
+      throw new Error('An embedded Zammad client acts as a user only through asUser.');
     }
     return new ZammadClient({
       apiToken: this.apiToken,

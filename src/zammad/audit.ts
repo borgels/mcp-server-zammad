@@ -7,7 +7,7 @@ import { currentCallContext, currentInstancePolicy, currentRedactor } from './sc
 
 export interface ZammadAuditEvent {
   requestId?: string;
-  /** The impersonated user (MCP server only; an embedded gateway never impersonates). */
+  /** The impersonated user (MCP server only; the gateway records the token user, and never the email of actAs). */
   actingAs?: string;
   tool: string;
   action: 'start' | 'finish' | 'error' | 'policy_denied' | 'rejected';

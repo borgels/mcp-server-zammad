@@ -89,7 +89,8 @@ The module exports:
   applies the person's own permissions and records them as the author (a
   reply, a note, a ticket, a state or tag change). The token's user needs
   `admin.user` for Zammad to accept `From`.
-  - No such user, an inactive one, or more than one: nothing is sent, and the
+  - No such user, an inactive one, more than one, or a full page of search
+    results (100, so a second user may be missing): nothing is sent, and the
     result is an error with `actAsRefused: 'no_user'`.
   - Zammad answering 401 to a request with `From` (the token's user lacks
     `admin.user`): `actAsRefused: 'not_permitted'`, not a refused token.
