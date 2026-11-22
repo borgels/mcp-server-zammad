@@ -123,7 +123,7 @@ describe('Zammad gateway surface', () => {
     expect(admitsKey(TOKEN_B)).toBe(true);
   });
 
-  it('has the agreed tool set: reads enabled by default, writes not, nothing broad, no delete', () => {
+  it('has the agreed tool set: reads enabled by default, writes not, nothing broad, no deletion of records', () => {
     expect(zammadToolCatalog.map(tool => [tool.name, tool.riskLevel, tool.enabledByDefault, tool.broad])).toEqual([
       ['search_capabilities', 'read', true, false],
       ['check_connection', 'read', true, false],
@@ -146,7 +146,9 @@ describe('Zammad gateway surface', () => {
     expect(Object.keys(MINIMAL_INPUT).sort()).toEqual(zammadToolCatalog.map(tool => tool.name).sort());
     for (const tool of zammadToolCatalog) {
       expect(tool.name.startsWith('zammad_')).toBe(false);
-      expect(tool.upstream.every(operation => operation.method !== ('DELETE' as never))).toBe(true);
+      // The only DELETE is Zammad's tag removal, which takes a tag off a ticket and deletes no record.
+      const deletes = tool.upstream.filter(operation => operation.method === 'DELETE').map(operation => operation.path);
+      expect(deletes).toEqual(tool.name === 'remove_tag' ? ['/api/v1/tags/remove'] : []);
     }
   });
 
@@ -203,6 +205,22 @@ describe('Zammad gateway upstream requests', () => {
       for (const operation of tool.upstream) {
         expect(reached.has(`${tool.name} ${operation.method} ${operation.path}`), `${tool.name} ${operation.path}`).toBe(true);
       }
+    }
+  });
+
+  it('adds a tag with POST and removes it with DELETE, the only method Zammad routes for /tags/remove', async () => {
+    for (const [name, request] of [
+      ['add_tag', 'POST /api/v1/tags/add'],
+      ['remove_tag', 'DELETE /api/v1/tags/remove'],
+    ] as const) {
+      const fetchImpl = zammad({});
+      const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool(name, { ticketId: 7, tag: 'hardware' });
+      expect(result.isError, `${name}: ${result.content[0]?.text}`).toBeUndefined();
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchImpl.mock.calls[0]!;
+      expect(requestOf(url, init)).toBe(request);
+      expect(headersOf(init)['Content-Type']).toBe('application/json');
+      expect(JSON.parse(String(init?.body))).toEqual({ item: 'hardware', object: 'Ticket', o_id: 7 });
     }
   });
 

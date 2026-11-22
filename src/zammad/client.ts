@@ -128,6 +128,11 @@ export class ZammadClient {
     return this.request<T>('PUT', path, undefined, body);
   }
 
+  /** DELETE with an optional JSON body (Zammad's /tags/remove takes its parameters in the body). */
+  async delete<T>(path: string, body?: unknown): Promise<T> {
+    return this.request<T>('DELETE', path, undefined, body);
+  }
+
   /** Fetch binary content (attachment downloads). Enforces a byte cap. */
   async getBinary(path: string, maxBytes: number): Promise<{ bytes: Uint8Array; contentType: string }> {
     const url = this.buildUrl(path);
@@ -193,7 +198,7 @@ export class ZammadClient {
   }
 
   private async request<T>(
-    method: 'GET' | 'POST' | 'PUT',
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     path: string,
     query?: Record<string, QueryValue>,
     body?: unknown,
