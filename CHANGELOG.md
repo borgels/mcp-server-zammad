@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1 (2026-11-22)
+
+- Gateway `actAs`: the stricter email check from the template (0.4.0): a
+  local part with a leading, trailing or doubled dot (`.a@`, `a.@`, `a..b@`)
+  or over 64 characters is refused as `invalid`. Dotted addresses that are
+  valid are kept.
+- The refusal of a malformed `actAs` now goes through the same redaction and
+  sink check as every other result, as in the template.
+- A test that said the gateway "never impersonates" now says what it checks:
+  no `From` header without `actAs` (#49).
+
 ## 0.6.0 (2026-11-22)
 
 - Gateway: changes are made as the person the host names. A host passes

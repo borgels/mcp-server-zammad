@@ -539,12 +539,13 @@ function buildZammadGateway(options: ZammadGatewayOptions, apiToken: string, red
     tools: zammadGatewayTools.filter(tool => !policy.disabledTools.has(canonicalToolName(tool.name))),
     callTool(toolName: string, input: GatewayJsonObject = {}, context?: GatewayCallContext): Promise<GatewayToolResult> {
       // The person to act as, checked before anything else: a malformed one refuses the call, so a change never runs as
-      // the token's own user by mistake.
+      // the token's own user by mistake. The refusal goes through the same redaction and sink check as every other result.
       let actAs: Readonly<ActAs> | undefined;
+      let invalid = false;
       try {
         actAs = normaliseActAs(context?.actAs);
       } catch {
-        return Promise.resolve(actAsRefused('invalid'));
+        invalid = true;
       }
       // Every call in a scope of its own.
       return runInCallScope(
@@ -560,7 +561,7 @@ function buildZammadGateway(options: ZammadGatewayOptions, apiToken: string, red
         // A successful result is already redacted as data by normalizeResult, and its JSON text is built from that
         // data. An error result is our own text, and is redacted as a whole.
         () =>
-          runCall(toolName, input).then(result => {
+          (invalid ? Promise.resolve(actAsRefused('invalid')) : runCall(toolName, input)).then(result => {
             // The failure metadata is redacted with the rest, then checked again: what is not in form is dropped.
             const final = withFailureInForm(result.isError ? (redactDeep(result, redactor) as GatewayToolResult) : result);
             // The sink check, as the very last step: a result that holds a piece of the token anywhere, outer fields

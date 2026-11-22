@@ -61,7 +61,9 @@ export class ActAsRefusedError extends Error {
   }
 }
 
-const EMAIL = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+/** A local part of dot-separated atoms (no leading, trailing or doubled dot), then a domain of two labels or more. */
+const ATOM = "[a-z0-9!#$%&'*+/=?^_`{|}~-]+";
+const EMAIL = new RegExp(`^${ATOM}(?:\\.${ATOM})*@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`);
 
 /**
  * The host's `actAs`, checked: undefined when the host gave none (undefined, not null), a frozen
@@ -75,7 +77,7 @@ export function normaliseActAs(value: unknown): Readonly<ActAs> | undefined {
   const { email, name } = value as Record<string, unknown>;
   if (typeof email !== 'string') throw new ActAsRefusedError('invalid');
   const address = email.trim().toLowerCase();
-  if (address.length > 254 || !EMAIL.test(address)) throw new ActAsRefusedError('invalid');
+  if (address.length > 254 || address.indexOf('@') > 64 || !EMAIL.test(address)) throw new ActAsRefusedError('invalid');
   if (name === undefined) return Object.freeze({ email: address });
   if (typeof name !== 'string') throw new ActAsRefusedError('invalid');
   const shown = name.trim();
