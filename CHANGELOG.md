@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 (2026-11-22)
+
+- Gateway: changes are made as the person the host names. A host passes
+  `actAs: { email }` (the template's shared shape, `src/act-as.ts`) in the
+  call context; every write tool then finds exactly one active Zammad user
+  with that email (`GET /api/v1/users/search`, as the token's user) and sends
+  the change with `From: <user id>`, so Zammad records the person as the
+  author and applies their permissions. No such user (or more than one):
+  nothing is sent, `actAsRefused: 'no_user'`. Zammad refusing `From` (401):
+  `actAsRefused: 'not_permitted'`. A malformed `actAs`: `invalid`. Reads run
+  as the token's user. Never a fallback to the token's user for a change; the
+  email is never audited. The catalog's write tools declare the lookup in
+  `upstream` (#47).
+- The read-only client view of a gateway read tool also refuses `DELETE`.
+
 ## 0.5.2 (2026-11-22)
 
 - `remove_tag` (and `zammad_manage_tags` with action `remove`) now sends

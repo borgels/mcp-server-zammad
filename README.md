@@ -77,9 +77,33 @@ The module exports:
   tool set), `ZAMMAD_TRUST_FORWARDED_USER`/`ZAMMAD_ALLOW_TOKEN_USER`,
   `ZAMMAD_TIMEOUT_MS` (default 30 seconds), `ZAMMAD_DEFAULT_GROUP` (a ticket
   without a group goes to `Users`) or `ZAMMAD_AUDIT_LOG`.
-- **No impersonation.** The gateway never sends `From` or `X-On-Behalf-Of`:
-  every call runs as the user who owns the token, with that user's Zammad
-  permissions. Per-person rights are the host's business.
+- **Acting as a person (`actAs`).** A host that verified the person a call
+  is made for passes `actAs: { email }` in the call context
+  (`gateway.callTool(name, input, { caller, actAs })`, `src/act-as.ts`, the
+  template's shared shape). Every **change** (the write tools) then first
+  finds exactly one active Zammad user whose email is that address
+  (`GET /api/v1/users/search` as the token's user, compared
+  case-insensitively) and is sent with `From: <that user's id>`, Zammad's
+  documented header for acting on behalf of another user
+  ([API intro](https://docs.zammad.org/en/latest/api/intro.html)), so Zammad
+  applies the person's own permissions and records them as the author (a
+  reply, a note, a ticket, a state or tag change). The token's user needs
+  `admin.user` for Zammad to accept `From`.
+  - No such user, an inactive one, more than one, or a full page of search
+    results (100, so a second user may be missing): nothing is sent, and the
+    result is an error with `actAsRefused: 'no_user'`.
+  - Zammad answering 401 to a request with `From` (the token's user lacks
+    `admin.user`): `actAsRefused: 'not_permitted'`, not a refused token.
+  - A malformed `actAs` (`null` included): `actAsRefused: 'invalid'`, before
+    anything is sent.
+  - A change is never made as the token's own user instead.
+  - **Reads run as the token's own user**, with or without `actAs`: the host
+    decides who may read what.
+  - The server adds the email to no audit record, text or field of its own.
+    Zammad's own data is passed on as it is.
+
+  Without `actAs` every call runs as the token's own user, as before. The
+  gateway never reads `X-MCP-User` or `ZAMMAD_TRUST_FORWARDED_USER`.
 - `normalizeZammadBaseUrl(url)`: a pure check a host can run before it stores
   an address. It returns `https://<host>` (lower case, no trailing slash or
   dot) or throws `GatewayConfigError` with a message starting
@@ -88,7 +112,7 @@ The module exports:
   a query string or a fragment, an IP address, `localhost` and local or
   single-label names (`.local`, `.internal`, `.lan`, `.home.arpa`, ...).
 - `gateway.tools` (the tools enabled on the instance) and
-  `gateway.callTool(name, input, { caller, requestId })`. Names are accepted
+  `gateway.callTool(name, input, { caller, requestId, actAs })`. Names are accepted
   with or without the `zammad_` prefix. Input is validated with the tool's zod
   schema before anything is sent, and unknown fields are refused. The audit
   records of a call hold `caller` only as an HMAC pseudonym (a per-process
@@ -131,7 +155,8 @@ The module exports:
 sent). `send_reply` makes Zammad **send a real email** to the ticket's
 customer (the customer's email address, the ticket title as subject). There
 are no delete tools, and no attachment download in the gateway. Read tools
-get a client that can only `GET`. The MCP server's own tools
+get a client that can only `GET`. Every write tool's `upstream` starts with
+`GET /api/v1/users/search`, the lookup of the person in `actAs`. The MCP server's own tools
 (`zammad_reply_ticket`, `zammad_manage_tags`, ...) are unchanged.
 
 **Address and network.** Every connection goes only to public addresses:

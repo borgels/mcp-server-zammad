@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { ActAs } from '../act-as.js';
 import type { SecretRedactor } from '../upstream-http.js';
 
 /**
@@ -52,6 +53,11 @@ export interface CallContext {
    * own, generated per call.
    */
   requestId?: string;
+  /**
+   * The person to act as, as the host verified them (src/act-as.ts). Changes are made as their own Zammad user, found by
+   * this email; never written to audit records. Without it every call runs as the token's own user.
+   */
+  actAs?: ActAs;
 }
 
 /** What one gateway call runs under. */
@@ -64,6 +70,8 @@ export interface CallScope {
   readonly requestId?: string;
   /** The prefixed names of the tools the instance offers; search_capabilities lists only these. */
   readonly offeredTools?: ReadonlySet<string>;
+  /** The person the host makes this call for, already checked (src/act-as.ts). Never written to the audit. */
+  readonly actAs?: Readonly<ActAs>;
 }
 
 export const TOOL_PREFIX = 'zammad_';
@@ -137,6 +145,11 @@ export function currentRedactor(): SecretRedactor | undefined {
 export function currentCallContext(): CallContext {
   const scope = callScope.getStore();
   return { caller: scope?.caller, requestId: scope?.requestId };
+}
+
+/** The person the call in progress is made for (src/act-as.ts), or undefined: outside a gateway call, or none given. */
+export function currentActAs(): Readonly<ActAs> | undefined {
+  return callScope.getStore()?.actAs;
 }
 
 /** The tools the gateway instance whose call is in progress offers, or undefined (the MCP server: all of them). */

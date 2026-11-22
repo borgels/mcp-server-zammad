@@ -1,4 +1,5 @@
 import { ConfigError, readEnvInteger, readEnvString, type Env } from '../config-env.js';
+import { ActAsRefusedError } from '../act-as.js';
 import { registerSecret, requestIdFrom, ZammadHttpError } from '../errors.js';
 import { describeUrl, type SecretRedactor } from '../upstream-http.js';
 import { isPublicAddress, pinnedFetch, systemResolve, type ResolveHost } from './network.js';
@@ -13,7 +14,7 @@ export const PRIVATE_ADDRESS_REFUSED = 'Refused: the Zammad address points to a 
 export interface ZammadClientOptions {
   apiToken?: string;
   baseUrl?: string;
-  /** Zammad login/email to impersonate via the From header on every call. Not available to embedded clients. */
+  /** Zammad login/email to impersonate via the From header on every call. Embedded clients use asUser instead. */
   onBehalfOf?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -70,6 +71,8 @@ export class ZammadClient {
   private readonly apiToken?: string;
   readonly baseUrl: string;
   readonly onBehalfOf?: string;
+  /** The Zammad user an embedded copy acts as (asUser); undefined on the token's own client. */
+  readonly actingUserId?: number;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly embedded?: { redactor: SecretRedactor; resolveHost: ResolveHost; hostFetch: boolean };
@@ -85,7 +88,7 @@ export class ZammadClient {
       options.embedded.redactor.addSecret(this.apiToken);
       const resolveHost = options.embedded.resolveHost ?? systemResolve;
       this.embedded = { redactor: options.embedded.redactor, resolveHost, hostFetch: options.fetchImpl !== undefined };
-      // Never impersonates: every call runs as the token's own user.
+      // Runs as the token's own user; a change made as a person uses a copy from asUser (numeric id only).
       this.onBehalfOf = undefined;
       // The built-in fetch connects only to public addresses, checked for every new connection (network.ts).
       this.fetchImpl = options.fetchImpl ?? pinnedFetch(resolveHost);
@@ -105,7 +108,7 @@ export class ZammadClient {
   /** A copy of this client acting as the given user (or as the token user when undefined). */
   actingAs(onBehalfOf: string | undefined): ZammadClient {
     if (this.embedded) {
-      throw new Error('An embedded Zammad client does not impersonate.');
+      throw new Error('An embedded Zammad client acts as a user only through asUser.');
     }
     return new ZammadClient({
       apiToken: this.apiToken,
@@ -114,6 +117,25 @@ export class ZammadClient {
       fetchImpl: this.fetchImpl,
       timeoutMs: this.timeoutMs,
     });
+  }
+
+  /**
+   * A copy of this embedded client that sends every request with `From: <userId>`, so Zammad runs it as that user: their
+   * permissions apply and they are recorded as the author. Only Zammad's own numeric id is sent, never an email or a
+   * login. A 401 to such a request means Zammad would not let the token act for the user (the token user lacks
+   * admin.user, or the user cannot be used): it becomes ActAsRefusedError('not_permitted'), never a refused token.
+   */
+  asUser(userId: number): ZammadClient {
+    if (!this.embedded) {
+      throw new Error('asUser is for embedded clients; the MCP server uses actingAs.');
+    }
+    if (!Number.isSafeInteger(userId) || userId < 1) {
+      throw new ActAsRefusedError('no_user');
+    }
+    const copy = Object.create(this) as ZammadClient;
+    Object.defineProperty(copy, 'onBehalfOf', { value: String(userId), enumerable: true });
+    Object.defineProperty(copy, 'actingUserId', { value: userId, enumerable: true });
+    return copy;
   }
 
   async get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
@@ -226,6 +248,8 @@ export class ZammadClient {
     if (!response.ok) {
       // The body is never read: Zammad's text never becomes part of an error.
       await discard(response);
+      // Acting as a user, a 401 is Zammad refusing the From header (the token was accepted for the lookup before it).
+      if (response.status === 401 && this.actingUserId !== undefined) throw new ActAsRefusedError('not_permitted');
       throw new ZammadHttpError({
         status: response.status,
         method,

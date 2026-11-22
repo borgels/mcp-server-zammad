@@ -8,6 +8,7 @@ import {
   vendorRequestId,
   type FailureMetadata,
 } from './errors.js';
+import { ActAsRefusedError, actAsRefusalInForm, normaliseActAs, type ActAs, type ActAsRefusal } from './act-as.js';
 import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { admitsKey, KEY_REFUSED, leaksSecret, maskedText, sealedError } from './key-admission.js';
 import { registerZammadGatewayTools } from './tools/gateway-tools.js';
@@ -39,8 +40,8 @@ import { REDACTION_MARKER, SecretRedactor } from './upstream-http.js';
  * passed to createZammadGateway and reads no ZAMMAD_* variable at all: not
  * the token (ZAMMAD_API_TOKEN), not the address (ZAMMAD_BASE_URL), not the
  * profile (ZAMMAD_PROFILE: the gateway always has the technician tool set),
- * not the impersonation settings (the gateway never impersonates: no From or
- * X-On-Behalf-Of header, every call runs as the token's own user), not
+ * not the impersonation settings (ZAMMAD_TRUST_FORWARDED_USER and X-MCP-User: the
+ * gateway acts as a person only when the host names one in `actAs`), not
  * ZAMMAD_TIMEOUT_MS (30 seconds unless `timeoutMs` is given), not
  * ZAMMAD_DEFAULT_GROUP, and none of the audit variables.
  *
@@ -53,6 +54,18 @@ import { REDACTION_MARKER, SecretRedactor } from './upstream-http.js';
  * passes `policy`; without it the instance uses the default policy (no
  * writes, no disabled tools, no audit records).
  *
+ * Acting as a person: a host that verified the person a call is made for
+ * passes `actAs: { email }` in the call context. Every change (a write tool)
+ * then first finds exactly one active Zammad user with that email
+ * (`GET /users/search`, as the token's user) and is sent with
+ * `From: <that user's id>`, so Zammad applies the person's own permissions and
+ * records them as the author. No such user, or more than one: nothing is
+ * sent, and the result has `actAsRefused: 'no_user'`. Zammad refusing the
+ * From header (401: the token's user lacks admin.user): `actAsRefused:
+ * 'not_permitted'`. A malformed `actAs` refuses the call (`invalid`). Reads
+ * run as the token's own user. The email is never written to the audit or
+ * returned. Without `actAs` every call runs as the token's own user.
+ *
  * Every call runs in a call scope of its own (AsyncLocalStorage), so a call
  * made from inside another instance's call (from its audit sink or its fetch)
  * never inherits that instance's policy, sink, redactor or caller.
@@ -63,6 +76,12 @@ export { GatewayConfigError } from './zammad/scope.js';
 export { ADDRESS_REFUSED, normalizeZammadBaseUrl } from './zammad/address.js';
 export { PRIVATE_ADDRESS_REFUSED } from './zammad/client.js';
 export { KEY_REFUSED } from './key-admission.js';
+export { ACT_AS_REFUSALS, ACT_AS_TEXTS } from './act-as.js';
+
+/** The person a call is made for (GatewayCallContext.actAs; see src/act-as.ts). */
+export type GatewayActAs = ActAs;
+/** Why a call was not made as the person: `invalid` actAs, `no_user` in Zammad, or the token is `not_permitted` to. */
+export type GatewayActAsRefusal = ActAsRefusal;
 
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
 export type GatewayJsonValue =
@@ -96,9 +115,14 @@ export interface GatewayToolResult {
   isError?: boolean;
   /** On an error result from Zammad only: its HTTP status and request id (see GatewayFailure). */
   failure?: GatewayFailure;
+  /**
+   * On an error result only: the change was not sent, because it could not be made as the person in `actAs`. The text
+   * is fixed and never holds the email.
+   */
+  actAsRefused?: GatewayActAsRefusal;
 }
 
-/** Who and which request a call belongs to; written to the audit records of the call. */
+/** Who and which request a call belongs to, and the person to act as (never written to the audit). */
 export type GatewayCallContext = CallContext;
 
 /** Deeply read-only JSON, as found in the frozen tool catalog. */
@@ -167,6 +191,8 @@ const get = (path: string): GatewayUpstreamOperation => ({ method: 'GET', path: 
 const post = (path: string): GatewayUpstreamOperation => ({ method: 'POST', path: `${API}${path}` });
 const put = (path: string): GatewayUpstreamOperation => ({ method: 'PUT', path: `${API}${path}` });
 const del = (path: string): GatewayUpstreamOperation => ({ method: 'DELETE', path: `${API}${path}` });
+/** A change made as the person in `actAs` first finds their user (src/zammad/act-as-user.ts). */
+const findPerson = get('/users/search');
 
 /** The gateway's tools, with their own titles and descriptions. */
 const GATEWAY_TOOLS: ReadonlyArray<{
@@ -263,10 +289,10 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     name: 'create_ticket',
     title: 'Create Zammad ticket',
     description:
-      'Open a new ticket with a title and a first message. The token user is the customer unless customer (an email) is given; an unknown email is created as a new customer. Without group the ticket goes to the group "Users".',
+      'Open a new ticket with a title and a first message. The user it is made as (the person in actAs, or else the token user) is the customer unless customer (an email) is given; an unknown email is created as a new customer. Without group the ticket goes to the group "Users".',
     riskLevel: 'write',
     summary: 'Zammad ticket created.',
-    upstream: [post('/tickets')],
+    upstream: [findPerson, post('/tickets')],
   },
   {
     name: 'add_note',
@@ -274,7 +300,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     description: 'Add an internal note to a ticket. The customer cannot see it and no email is sent. Notes cannot be edited or deleted afterwards.',
     riskLevel: 'write',
     summary: 'Zammad note added.',
-    upstream: [post('/ticket_articles')],
+    upstream: [findPerson, post('/ticket_articles')],
   },
   {
     name: 'send_reply',
@@ -283,7 +309,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
       'Send a reply to the ticket\'s customer. Zammad SENDS it as a real email to the customer\'s email address, with the ticket title as subject, and adds it to the ticket. It cannot be recalled, edited or deleted afterwards. For a message only colleagues see, use add_note.',
     riskLevel: 'write',
     summary: 'Zammad reply sent.',
-    upstream: [get('/tickets/{ticketId}'), get('/users/{userId}'), post('/ticket_articles')],
+    upstream: [findPerson, get('/tickets/{ticketId}'), get('/users/{userId}'), post('/ticket_articles')],
   },
   {
     name: 'update_ticket',
@@ -292,7 +318,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
       'Change a ticket\'s title, state (e.g. open, closed, "pending reminder"), owner, priority or group. pendingTime (ISO timestamp) goes with pending states. Valid values come from list_reference_data.',
     riskLevel: 'write',
     summary: 'Zammad ticket updated.',
-    upstream: [put('/tickets/{ticketId}')],
+    upstream: [findPerson, put('/tickets/{ticketId}')],
   },
   {
     name: 'add_tag',
@@ -300,7 +326,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     description: 'Add one tag to a ticket.',
     riskLevel: 'write',
     summary: 'Zammad tag added.',
-    upstream: [post('/tags/add')],
+    upstream: [findPerson, post('/tags/add')],
   },
   {
     name: 'remove_tag',
@@ -308,7 +334,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     description: 'Remove one tag from a ticket.',
     riskLevel: 'write',
     summary: 'Zammad tag removed.',
-    upstream: [del('/tags/remove')],
+    upstream: [findPerson, del('/tags/remove')],
   },
   {
     name: 'manage_user',
@@ -317,7 +343,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
       'Create or update a user\'s profile and contact fields: firstname, lastname, email (create only), phone, mobile, fax, web, department, address, street, zip, city, country, note, vip, organization, organization_id. Roles, groups, organization memberships and passwords are refused.',
     riskLevel: 'write',
     summary: 'Zammad user saved.',
-    upstream: [post('/users'), put('/users/{userId}')],
+    upstream: [findPerson, post('/users'), put('/users/{userId}')],
   },
 ];
 
@@ -512,9 +538,18 @@ function buildZammadGateway(options: ZammadGatewayOptions, apiToken: string, red
     /** Tools enabled on this instance (tools the host's policy disables are left out). */
     tools: zammadGatewayTools.filter(tool => !policy.disabledTools.has(canonicalToolName(tool.name))),
     callTool(toolName: string, input: GatewayJsonObject = {}, context?: GatewayCallContext): Promise<GatewayToolResult> {
+      // The person to act as, checked before anything else: a malformed one refuses the call, so a change never runs as
+      // the token's own user by mistake.
+      let actAs: Readonly<ActAs> | undefined;
+      try {
+        actAs = normaliseActAs(context?.actAs);
+      } catch {
+        return Promise.resolve(actAsRefused('invalid'));
+      }
       // Every call in a scope of its own.
       return runInCallScope(
         {
+          ...(actAs ? { actAs } : {}),
           policy,
           redactor,
           caller: contextValue(context?.caller, redactor),
@@ -556,9 +591,15 @@ function buildZammadGateway(options: ZammadGatewayOptions, apiToken: string, red
       const result = await tool.handler(parsed.data as Record<string, unknown>);
       return normalizeResult(result, redactor, SUMMARIES.get(name) ?? 'Zammad gateway result.');
     } catch (error) {
+      if (error instanceof ActAsRefusedError) return actAsRefused(error.refusal);
       return errorResult(formatUnknownError(error), failureMetadata(error));
     }
   }
+}
+
+/** A change not made as the person: our fixed text and the refusal, nothing else. */
+function actAsRefused(refusal: ActAsRefusal): GatewayToolResult {
+  return { ...errorResult(new ActAsRefusedError(refusal).message), actAsRefused: refusal };
 }
 
 /**
@@ -677,7 +718,10 @@ function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult 
  * still in the form of one (redaction can have changed it). Anything else is dropped, never passed on.
  */
 function withFailureInForm(result: GatewayToolResult): GatewayToolResult {
-  const { failure, ...rest } = result;
+  const { failure, actAsRefused: refusal, ...withoutRefusal } = result;
+  // The refusal stays only on an error result, and only as one of ours.
+  const kept = result.isError ? actAsRefusalInForm(refusal) : undefined;
+  const rest: GatewayToolResult = kept ? { ...withoutRefusal, actAsRefused: kept } : withoutRefusal;
   if (!result.isError || failure === undefined || failure === null || typeof failure !== 'object') return rest;
   const status = failure.httpStatus;
   if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) return rest;
