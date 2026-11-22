@@ -290,7 +290,7 @@ describe('Zammad gateway upstream requests', () => {
 });
 
 describe('Zammad gateway connection settings', () => {
-  it('uses only the token and address it was given, never ZAMMAD_*, and never impersonates', async () => {
+  it('uses only the token and address it was given, never ZAMMAD_*, and sends no From header without actAs', async () => {
     const fetchImpl = zammad();
     const g = createZammadGateway({
       apiToken: TOKEN_A,
@@ -706,7 +706,7 @@ describe('Zammad gateway acting as a person (actAs)', () => {
   });
 
   it('refuses a malformed person before anything is sent', async () => {
-    for (const actAs of [null, { email: 'not an email' }, { email: 7 }, { email: 'a\u0000b@demobyg.example' }, 'mette@demobyg.example', { email: PERSON, name: '' }]) {
+    for (const actAs of [null, { email: 'not an email' }, { email: 7 }, { email: 'a\u0000b@demobyg.example' }, 'mette@demobyg.example', { email: PERSON, name: '' }, { email: 'a..b@demobyg.example' }, { email: '.a@demobyg.example' }, { email: 'a.@demobyg.example' }, { email: `${'a'.repeat(65)}@demobyg.example` }]) {
       const fetchImpl = zammadWithUsers();
       const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!, {
         actAs: actAs as never,
@@ -714,6 +714,27 @@ describe('Zammad gateway acting as a person (actAs)', () => {
       expect(result, JSON.stringify(actAs)).toMatchObject({ isError: true, actAsRefused: 'invalid' });
       expect(fetchImpl).not.toHaveBeenCalled();
     }
+  });
+
+  it('keeps dotted addresses that are valid', async () => {
+    const fetchImpl = zammadWithUsers();
+    const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!, {
+      actAs: { email: 'mette.k.hansen@demobyg.example' },
+    });
+    expect(result.actAsRefused).not.toBe('invalid');
+    expect(fetchImpl).toHaveBeenCalled();
+  });
+
+  it('sends the refusal of a malformed person through the sink check like every other result', async () => {
+    // A token the admission allows that shares a piece of 6 characters with the result's field name actAsRefused.
+    const token = 'qqqactAsRwwwzzzz1';
+    const fetchImpl = zammadWithUsers();
+    const gw = createZammadGateway({ apiToken: token, baseUrl: BASE, fetchImpl, resolveHost, policy: { enableWrites: true } });
+    const result = await gw.callTool('add_note', MINIMAL_INPUT.add_note!, { actAs: null as never });
+    expect(result.isError).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    const text = JSON.stringify(result);
+    for (let i = 0; i + 6 <= token.length; i += 1) expect(text, token.slice(i, i + 6)).not.toContain(token.slice(i, i + 6));
   });
 
   it('never writes the email to the audit', async () => {
