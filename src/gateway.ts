@@ -112,7 +112,7 @@ export type GatewayReadonlyJsonValue =
 
 /** One Zammad API request a tool may make: the method and the path template on the customer's Zammad address. */
 export interface GatewayUpstreamOperation {
-  readonly method: 'GET' | 'POST' | 'PUT';
+  readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE';
   readonly path: string;
 }
 
@@ -166,6 +166,7 @@ const API = '/api/v1';
 const get = (path: string): GatewayUpstreamOperation => ({ method: 'GET', path: `${API}${path}` });
 const post = (path: string): GatewayUpstreamOperation => ({ method: 'POST', path: `${API}${path}` });
 const put = (path: string): GatewayUpstreamOperation => ({ method: 'PUT', path: `${API}${path}` });
+const del = (path: string): GatewayUpstreamOperation => ({ method: 'DELETE', path: `${API}${path}` });
 
 /** The gateway's tools, with their own titles and descriptions. */
 const GATEWAY_TOOLS: ReadonlyArray<{
@@ -307,7 +308,7 @@ const GATEWAY_TOOLS: ReadonlyArray<{
     description: 'Remove one tag from a ticket.',
     riskLevel: 'write',
     summary: 'Zammad tag removed.',
-    upstream: [post('/tags/remove')],
+    upstream: [del('/tags/remove')],
   },
   {
     name: 'manage_user',

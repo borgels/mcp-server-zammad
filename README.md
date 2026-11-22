@@ -124,7 +124,7 @@ The module exports:
 | `send_reply` | write | off | `GET /api/v1/tickets/{ticketId}`, `GET /api/v1/users/{userId}`, `POST /api/v1/ticket_articles` (email to the customer) |
 | `update_ticket` | write | off | `PUT /api/v1/tickets/{ticketId}` |
 | `add_tag` | write | off | `POST /api/v1/tags/add` |
-| `remove_tag` | write | off | `POST /api/v1/tags/remove` |
+| `remove_tag` | write | off | `DELETE /api/v1/tags/remove` |
 | `manage_user` | write | off | `POST /api/v1/users`, `PUT /api/v1/users/{userId}` |
 
 `add_note` adds an internal note (the customer does not see it, no mail is

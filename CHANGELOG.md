@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.2 (2026-11-22)
+
+- `remove_tag` (and `zammad_manage_tags` with action `remove`) now sends
+  `DELETE /api/v1/tags/remove`, the only method Zammad routes for that path
+  (`config/routes/tag.rb`). It sent `POST`, so the tag stayed on the ticket
+  and the tool returned an error. The client has a `delete` method with a
+  JSON body, the catalog's `upstream` for `remove_tag` says `DELETE`, and a
+  test pins the method for both tag tools (#45).
+
 ## 0.5.1 (2026-11-21)
 
 - Licensor and copyright holder corrected to Borgels Services ApS in `LICENSE`,

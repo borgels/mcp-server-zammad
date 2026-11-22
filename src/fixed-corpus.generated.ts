@@ -151,6 +151,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "Create/Update User (Zammad)",
   "Create/Update User (Zammad, technician)",
   "Customer email; unknown emails are created as customers.",
+  "DELETE",
   "DEPTH_ZERO_SELF_SIGNED_CERT",
   "Discovery only. Does not call Zammad.",
   "Download Attachment (Zammad)",

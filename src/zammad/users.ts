@@ -147,7 +147,8 @@ export async function manageTags(client: ZammadClient, input: ManageTagsInput): 
     throw new Error('tag is required for add/remove.');
   }
   const body = { item: input.tag, object: 'Ticket', o_id: input.ticketId };
-  return input.action === 'add' ? client.post('/tags/add', body) : client.post('/tags/remove', body);
+  // Zammad routes /tags/remove for DELETE only (config/routes/tag.rb); a POST there is not a removal.
+  return input.action === 'add' ? client.post('/tags/add', body) : client.delete('/tags/remove', body);
 }
 
 export async function listReferenceData(client: ZammadClient): Promise<unknown> {
