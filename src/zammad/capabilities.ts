@@ -28,9 +28,9 @@ export const WRITE_TOOL_ANNOTATIONS = {
 export const IDENTITY_NOTE =
   'Runs as the requesting user (gateway identity → Zammad From header) — Zammad enforces their real permissions and attributes the action to them.';
 
-/** The embedded gateway's note: it never impersonates. */
+/** The embedded gateway's note: reads as the token's user, changes as the person the host names (actAs). */
 export const TOKEN_USER_NOTE =
-  "Runs as the Zammad user who owns the access token; Zammad enforces that user's permissions and records the action as theirs.";
+  "Reads run as the Zammad user who owns the access token. A change runs as the person the host names, or as the token's user when the host names none; Zammad enforces that user's permissions and records the action as theirs.";
 
 export const ZAMMAD_CAPABILITIES: ZammadCapability[] = [
   {

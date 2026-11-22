@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod/v4';
 import { IDENTITY_NOTE, READ_TOOL_ANNOTATIONS, searchCapabilities, TOKEN_USER_NOTE, WRITE_TOOL_ANNOTATIONS } from '../zammad/capabilities.js';
+import { clientForChange } from '../zammad/act-as-user.js';
 import type { ZammadClient } from '../zammad/client.js';
 import { searchKnowledgeBase } from '../zammad/kb.js';
 import { currentOfferedTools } from '../zammad/scope.js';
@@ -9,9 +10,12 @@ import { checkConnection, listOrganizations, listReferenceData, listUsers, manag
 import { jsonToolResult, pageShape, runAuditedTool, ticketIdSchema } from './zammad.js';
 
 /**
- * The tools of the embedded gateway (src/gateway.ts). They run as the token's
- * own user (never impersonated) with the technician tool set, under the
- * host's policy. The MCP server's own tools (src/tools/zammad.ts) are
+ * The tools of the embedded gateway (src/gateway.ts), with the technician
+ * tool set, under the host's policy. Reads run as the token's own user. A
+ * change runs as the person the host names in `actAs` (the client from
+ * clientForChange: their own Zammad user, found by email, with the From
+ * header), and is refused when that person has no user; without `actAs` it
+ * runs as the token's own user. The MCP server's own tools (src/tools/zammad.ts) are
  * unchanged; the gateway splits reply and tags into tools with one effect
  * each, so a host can grant them one by one.
  *
@@ -21,7 +25,7 @@ function readOnly(client: ZammadClient, tool: string): ZammadClient {
   const refuse = async () => {
     throw new Error(`Read tool ${tool} attempted a change in Zammad; refused.`);
   };
-  return Object.assign(Object.create(client) as ZammadClient, { post: refuse, put: refuse });
+  return Object.assign(Object.create(client) as ZammadClient, { post: refuse, put: refuse, delete: refuse });
 }
 
 const tagShape = {
@@ -50,7 +54,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
       run('zammad_search_capabilities', input, async () =>
         searchCapabilities(input.query, input.limit, currentOfferedTools() ?? new Set()).map(capability => ({
           ...capability,
-          // The gateway never impersonates.
+          // The gateway reads as the token's user and changes as the host's person.
           safetyNotes: capability.safetyNotes.map(note => (note === IDENTITY_NOTE ? TOKEN_USER_NOTE : note)),
         })),
       ),
@@ -171,7 +175,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => run('zammad_create_ticket', input, async () => createTicket(client, input)),
+    async input => run('zammad_create_ticket', input, async () => createTicket(await clientForChange(client), input)),
   );
 
   server.registerTool(
@@ -181,7 +185,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
       inputSchema: { ticketId: ticketIdSchema, body: z.string().trim().min(1).max(100_000) },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => run('zammad_add_note', input, async () => addNote(client, input)),
+    async input => run('zammad_add_note', input, async () => addNote(await clientForChange(client), input)),
   );
 
   server.registerTool(
@@ -191,7 +195,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
       inputSchema: { ticketId: ticketIdSchema, body: z.string().trim().min(1).max(100_000) },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => run('zammad_send_reply', input, async () => sendReply(client, input)),
+    async input => run('zammad_send_reply', input, async () => sendReply(await clientForChange(client), input)),
   );
 
   server.registerTool(
@@ -209,7 +213,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => run('zammad_update_ticket', input, async () => updateTicket(client, input)),
+    async input => run('zammad_update_ticket', input, async () => updateTicket(await clientForChange(client), input)),
   );
 
   server.registerTool(
@@ -217,7 +221,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
     { title: 'Add Zammad ticket tag', inputSchema: tagShape, annotations: WRITE_TOOL_ANNOTATIONS },
     async input =>
       run('zammad_add_tag', input, async () =>
-        manageTags(client, { action: 'add', ticketId: input.ticketId, tag: input.tag }),
+        manageTags(await clientForChange(client), { action: 'add', ticketId: input.ticketId, tag: input.tag }),
       ),
   );
 
@@ -226,7 +230,7 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
     { title: 'Remove Zammad ticket tag', inputSchema: tagShape, annotations: WRITE_TOOL_ANNOTATIONS },
     async input =>
       run('zammad_remove_tag', input, async () =>
-        manageTags(client, { action: 'remove', ticketId: input.ticketId, tag: input.tag }),
+        manageTags(await clientForChange(client), { action: 'remove', ticketId: input.ticketId, tag: input.tag }),
       ),
   );
 
@@ -241,6 +245,6 @@ export function registerZammadGatewayTools(server: McpServer, client: ZammadClie
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
-    async input => run('zammad_manage_user', input, async () => manageUser(client, input)),
+    async input => run('zammad_manage_user', input, async () => manageUser(await clientForChange(client), input)),
   );
 }

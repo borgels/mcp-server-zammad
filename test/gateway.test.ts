@@ -117,6 +117,17 @@ const MORE_INPUTS: Array<[string, GatewayJsonObject]> = [
 
 const WRITES = ['create_ticket', 'add_note', 'send_reply', 'update_ticket', 'add_tag', 'remove_tag', 'manage_user'];
 
+/** The person a host names in actAs, and their user in the stand-in Zammad. */
+const PERSON = 'mette.hansen@demobyg.example';
+const PERSON_ID = 9;
+
+/** A Zammad that finds `users` on a user search and answers every other request with DATA. */
+function zammadWithUsers(users: unknown[] = [{ id: PERSON_ID, email: 'Mette.Hansen@Demobyg.example', active: true }]) {
+  return vi.fn<typeof fetch>(async (url, init) =>
+    requestOf(url, init) === 'GET /api/v1/users/search' ? jsonResponse(users) : jsonResponse(DATA),
+  );
+}
+
 describe('Zammad gateway surface', () => {
   it('uses test credentials the gateway admits', () => {
     expect(admitsKey(TOKEN_A)).toBe(true);
@@ -189,8 +200,10 @@ describe('Zammad gateway upstream requests', () => {
   it('sends only the requests the catalog declares for each tool, and reaches each of them', async () => {
     const reached = new Set<string>();
     for (const [name, input] of [...Object.entries(MINIMAL_INPUT), ...MORE_INPUTS]) {
-      const fetchImpl = zammad();
-      const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool(name, input);
+      // A change is made as a person, which reaches the user search.
+      const fetchImpl = zammadWithUsers();
+      const context = WRITES.includes(name) ? { actAs: { email: PERSON } } : undefined;
+      const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool(name, input, context);
       expect(result.isError, `${name}: ${result.content[0]?.text}`).toBeUndefined();
       const declared = zammadToolCatalog.find(tool => tool.name === name)!.upstream;
       for (const [url, init] of fetchImpl.mock.calls) {
@@ -607,5 +620,117 @@ describe('Zammad gateway tenants and call scopes', () => {
     gateway(zammad());
     const { redactSecrets } = await import('../src/errors.js');
     expect(redactSecrets(`x ${TOKEN_A} y`)).toBe(`x ${TOKEN_A} y`);
+  });
+});
+
+describe('Zammad gateway acting as a person (actAs)', () => {
+  const writes = () => gateway;
+
+  it('finds the person as the token user, then sends the change with From: their id', async () => {
+    for (const name of WRITES) {
+      const fetchImpl = zammadWithUsers();
+      const result = await writes()(fetchImpl, { policy: { enableWrites: true } }).callTool(name, MINIMAL_INPUT[name]!, {
+        caller: 'p1',
+        actAs: { email: ` ${PERSON.toUpperCase()} ` },
+      });
+      expect(result.isError, `${name}: ${result.content[0]?.text}`).toBeUndefined();
+      const calls = fetchImpl.mock.calls;
+      expect(requestOf(calls[0]![0], calls[0]![1]), name).toBe('GET /api/v1/users/search');
+      expect(new URL(String(calls[0]![0])).searchParams.get('query')).toBe(PERSON);
+      expect(headersOf(calls[0]![1]).From, `${name}: the lookup runs as the token user`).toBeUndefined();
+      for (const [url, init] of calls.slice(1)) {
+        expect(headersOf(init).From, `${name}: ${requestOf(url, init)}`).toBe(String(PERSON_ID));
+      }
+      expect(calls.length, name).toBeGreaterThan(1);
+    }
+  });
+
+  it('sends nothing when the person has no single active user with that email', async () => {
+    const cases: unknown[][] = [
+      [],
+      [{ id: 9, email: 'mette.hansen@demobyg.example.other', active: true }],
+      [{ id: 9, email: PERSON, active: false }],
+      [
+        { id: 9, email: PERSON, active: true },
+        { id: 10, email: PERSON, active: true },
+      ],
+      [{ id: 'nine', email: PERSON, active: true }],
+    ];
+    for (const users of cases) {
+      const fetchImpl = zammadWithUsers(users);
+      const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('send_reply', MINIMAL_INPUT.send_reply!, {
+        actAs: { email: PERSON },
+      });
+      expect(result, JSON.stringify(users)).toMatchObject({ isError: true, actAsRefused: 'no_user' });
+      expect(JSON.stringify(result)).not.toContain(PERSON);
+      expect(fetchImpl.mock.calls.map(([url, init]) => requestOf(url, init))).toEqual(['GET /api/v1/users/search']);
+    }
+  });
+
+  it('says not_permitted when Zammad refuses the From header, and does not call it a refused token', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) =>
+      requestOf(url, init) === 'GET /api/v1/users/search'
+        ? jsonResponse([{ id: PERSON_ID, email: PERSON, active: true }])
+        : jsonResponse({ error: 'Current user has no permission to use From' }, 401),
+    );
+    const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!, {
+      actAs: { email: PERSON },
+    });
+    expect(result).toMatchObject({ isError: true, actAsRefused: 'not_permitted' });
+    expect(result.failure).toBeUndefined();
+  });
+
+  it('keeps a 401 to the lookup itself as a refused token', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({}, 401));
+    const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!, {
+      actAs: { email: PERSON },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.actAsRefused).toBeUndefined();
+    expect(result.failure?.httpStatus).toBe(401);
+  });
+
+  it('runs reads as the token user, without a lookup', async () => {
+    const fetchImpl = zammadWithUsers();
+    const result = await gateway(fetchImpl).callTool('get_ticket', { ticketId: 7 }, { actAs: { email: PERSON } });
+    expect(result.isError).toBeUndefined();
+    expect(fetchImpl.mock.calls.map(([url, init]) => requestOf(url, init))).not.toContain('GET /api/v1/users/search');
+    for (const [, init] of fetchImpl.mock.calls) expect(headersOf(init).From).toBeUndefined();
+  });
+
+  it('runs a change as the token user when the host names no person', async () => {
+    const fetchImpl = zammadWithUsers();
+    await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!);
+    expect(fetchImpl.mock.calls.map(([url, init]) => requestOf(url, init))).toEqual(['POST /api/v1/ticket_articles']);
+    expect(headersOf(fetchImpl.mock.calls[0]![1]).From).toBeUndefined();
+  });
+
+  it('refuses a malformed person before anything is sent', async () => {
+    for (const actAs of [null, { email: 'not an email' }, { email: 7 }, { email: 'a\u0000b@demobyg.example' }, 'mette@demobyg.example', { email: PERSON, name: '' }]) {
+      const fetchImpl = zammadWithUsers();
+      const result = await gateway(fetchImpl, { policy: { enableWrites: true } }).callTool('add_note', MINIMAL_INPUT.add_note!, {
+        actAs: actAs as never,
+      });
+      expect(result, JSON.stringify(actAs)).toMatchObject({ isError: true, actAsRefused: 'invalid' });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    }
+  });
+
+  it('never writes the email to the audit', async () => {
+    const { records, audit } = sink();
+    const gw = gateway(zammadWithUsers(), { policy: { enableWrites: true, audit } });
+    await gw.callTool('add_note', MINIMAL_INPUT.add_note!, { caller: 'p1', actAs: { email: PERSON } });
+    await gw.callTool('add_note', MINIMAL_INPUT.add_note!, { caller: 'p1', actAs: { email: 'nobody@demobyg.example' } });
+    expect(records.length).toBeGreaterThan(0);
+    const text = JSON.stringify(records).toLowerCase();
+    expect(text).not.toContain(PERSON);
+    expect(text).not.toContain('nobody@demobyg.example');
+  });
+
+  it('keeps the read-only view from deleting', async () => {
+    const fetchImpl = zammadWithUsers();
+    const result = await gateway(fetchImpl).callTool('list_tags', { ticketId: 7 }, { actAs: { email: PERSON } });
+    expect(result.isError).toBeUndefined();
+    for (const [url, init] of fetchImpl.mock.calls) expect(requestOf(url, init).startsWith('GET ')).toBe(true);
   });
 });
